@@ -21,6 +21,13 @@ REPO_URL = "https://github.com/deepseek-ai/deepseek-harness"
 VERSION_RE = re.compile(r"^v?\d+\.\d+\.\d+")
 
 
+def _spawn_cmd(argv: list[str]) -> list[str]:
+    """Windows 上 pnpm 是 .cmd 垫片, subprocess 不带 shell 找不到, 需经 cmd 解析。"""
+    if os.name == "nt" and argv and argv[0] == "pnpm":
+        return ["cmd", "/c"] + argv
+    return argv
+
+
 def _exe_dir() -> Path:
     """打包(exe)时返回 exe 所在目录, 否则返回脚本目录。"""
     if getattr(sys, "frozen", False):
@@ -36,16 +43,31 @@ def _proxy_url(host: str, port) -> str:
     return f"http://{host}:{port}"
 
 
+def _strip_prefix(tag: str) -> str:
+    """去掉可选的 'dsh-' 与 'v' 前缀, 便于版本号解析。"""
+    t = tag
+    if t.startswith("dsh-"):
+        t = t[4:]
+    if t.startswith("v"):
+        t = t[1:]
+    return t
+
+
+def _dir_clean(tag: str) -> str:
+    """用于目录名的干净名称 (去掉 dsh- 前缀)。"""
+    return tag[4:] if tag.startswith("dsh-") else tag
+
+
 def sort_versions(tags: list[str]) -> list[str]:
     """把 tag 列表按版本号语义降序排序, 剔除不是版本号的 tag。"""
     parsed = []
     for tag in tags:
-        raw = tag[1:] if tag.startswith("v") else tag
+        raw = _strip_prefix(tag)
         try:
             v = Version(raw)
         except InvalidVersion:
             continue
-        if not VERSION_RE.match(tag):
+        if not re.match(r"^\d+\.\d+\.\d+", raw):
             continue
         parsed.append((v, tag))
     # 降序; rc/预发布按 packaging 规则排在对应正式版之后
@@ -128,8 +150,8 @@ class DSHManager:
         except (FileNotFoundError, OSError, subprocess.TimeoutExpired):
             pass
         try:
-            r = subprocess.run(["pnpm", "--version"], capture_output=True, text=True,
-                               timeout=15, check=False)
+            r = subprocess.run(_spawn_cmd(["pnpm", "--version"]), capture_output=True,
+                               text=True, timeout=15, check=False)
             if r.returncode == 0:
                 res["pnpm"] = True
                 res["pnpm_version"] = (r.stdout or r.stderr).strip()
@@ -153,14 +175,23 @@ class DSHManager:
 
     # ---------- clone ----------
     def clone_tag(self, tag: str, on_log=None) -> str:
-        target = self.repos_dir / f"dsh-{tag}"
+        target = self.repos_dir / f"dsh-{_dir_clean(tag)}"
+        # 已克隆过则直接复用
+        if (target / ".git").exists():
+            if on_log:
+                on_log(f"[提示] {tag} 已在本机, 无需重新下载")
+            return str(target)
+        if target.exists() and any(target.iterdir()):
+            raise FileExistsError(f"目标目录非空, 无法克隆: {target}")
         target.mkdir(parents=True, exist_ok=True)
         cmd = ["git", "clone", "--depth", "1", "--branch", tag,
                *self.git_proxy_args(), REPO_URL, str(target)]
         self._run_stream(cmd, on_log, cwd=self.data_dir)
+        (target / ".dsh-tag").write_text(tag, encoding="utf-8")
         return str(target)
 
     def _run_stream(self, cmd, on_log, cwd=None, check=True):
+        cmd = _spawn_cmd(list(cmd))
         proc = subprocess.Popen(
             cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
             text=True, encoding="utf-8", errors="replace", cwd=cwd,
@@ -186,7 +217,7 @@ class DSHManager:
         # 后台启动 dsh web
         self.stop_dsh()
         proc = subprocess.Popen(
-            ["pnpm", "dsh", "web", "--port", str(port)],
+            _spawn_cmd(["pnpm", "dsh", "web", "--port", str(port)]),
             cwd=repo_dir,
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
             text=True, encoding="utf-8", errors="replace",
@@ -208,6 +239,9 @@ class DSHManager:
 
     @staticmethod
     def _tag_from_repo(repo_dir: Path) -> str:
+        marker = repo_dir / ".dsh-tag"
+        if marker.exists():
+            return marker.read_text(encoding="utf-8").strip()
         return repo_dir.name.removeprefix("dsh-")
 
     def stop_dsh(self) -> bool:
@@ -249,7 +283,10 @@ class DSHManager:
         if self.repos_dir.exists():
             for d in sorted(self.repos_dir.iterdir()):
                 if d.is_dir() and (d / "package.json").exists():
-                    out.append({"tag": d.name.removeprefix("dsh-"), "path": str(d)})
+                    marker = d / ".dsh-tag"
+                    tag = marker.read_text(encoding="utf-8").strip() \
+                        if marker.exists() else d.name.removeprefix("dsh-")
+                    out.append({"tag": tag, "path": str(d)})
         return out
 
     @property

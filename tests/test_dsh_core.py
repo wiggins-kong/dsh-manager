@@ -28,6 +28,15 @@ def test_sort_versions_filters_non_version():
     assert "docs-update" not in out
 
 
+def test_sort_versions_dsh_prefix():
+    # 官方 tag 形如 dsh-v0.1.0-rc.x
+    tags = ["dsh-v0.1.0-rc.7", "dsh-v0.1.0-rc.8", "master"]
+    out = sort_versions(tags)
+    assert out[0] == "dsh-v0.1.0-rc.8"
+    assert out[1] == "dsh-v0.1.0-rc.7"
+    assert "master" not in out
+
+
 # ---------------- proxy ----------------
 
 def _manager(tmp_path):
