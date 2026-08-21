@@ -155,12 +155,98 @@ def test_set_theme_persists(tmp_path):
     assert m2.config["theme"] == "light"
 
 
+def test_set_theme_system(tmp_path):
+    m = _manager(tmp_path)
+    assert m.set_theme("system") == "system"
+    m2 = _manager(tmp_path)
+    assert m2.config["theme"] == "system"
+
+
 def test_local_repos(tmp_path):
     m = _manager(tmp_path)
     d = m.repos_dir / "dsh-v0.1.0"
     d.mkdir(parents=True)
     (d / "package.json").write_text("{}")
     assert m.local_repos() == [{"tag": "v0.1.0", "path": str(d)}]
+
+
+# ---------------- workspace ----------------
+
+def _mk_repo(m, tag):
+    d = m.repos_dir / f"dsh-{tag}"
+    d.mkdir(parents=True)
+    (d / "package.json").write_text("{}")
+    (d / ".dsh-tag").write_text(tag)
+    return d
+
+
+def test_preview_same_path_no_prompt(tmp_path):
+    m = _manager(tmp_path)
+    p = m.preview_workspace(m.repos_dir)
+    assert p["same"] is True
+    assert p["will_prompt"] is False
+
+
+def test_preview_new_path_no_source(tmp_path):
+    m = _manager(tmp_path)
+    newdir = tmp_path / "newrepo"
+    p = m.preview_workspace(newdir)
+    assert p["same"] is False
+    assert p["old_count"] == 0
+    assert p["will_prompt"] is False
+
+
+def test_preview_new_path_with_source_prompts(tmp_path):
+    m = _manager(tmp_path)
+    _mk_repo(m, "v0.1.0")
+    p = m.preview_workspace(tmp_path / "newrepo")
+    assert p["old_count"] == 1
+    assert p["will_prompt"] is True
+
+
+def test_apply_move(tmp_path):
+    m = _manager(tmp_path)
+    _mk_repo(m, "v0.1.0")
+    old = m.repos_dir
+    newdir = tmp_path / "newrepo"
+    res = m.apply_workspace(newdir, on_old="move")
+    assert res["changed"] is True
+    assert res["moved"] == 1
+    assert (newdir / "dsh-v0.1.0" / "package.json").exists()
+    assert not (old / "dsh-v0.1.0").exists()
+    assert m.repos_dir == newdir
+    # 持久化
+    m2 = _manager(tmp_path)
+    assert str(m2.repos_dir) == str(newdir)
+    assert m2.local_repos()[0]["tag"] == "v0.1.0"
+
+
+def test_apply_delete(tmp_path):
+    m = _manager(tmp_path)
+    _mk_repo(m, "v0.1.0")
+    newdir = tmp_path / "newrepo"
+    res = m.apply_workspace(newdir, on_old="delete")
+    assert res["changed"] is True
+    assert m.local_repos() == []
+    assert m.repos_dir == newdir
+
+
+def test_apply_leave(tmp_path):
+    m = _manager(tmp_path)
+    old = _mk_repo(m, "v0.1.0")
+    newdir = tmp_path / "newrepo"
+    res = m.apply_workspace(newdir, on_old="leave")
+    assert res["changed"] is True
+    assert (old / "package.json").exists()  # 旧源码仍在
+    assert m.local_repos() == []            # 新路径无源码
+
+
+def test_apply_same_noop(tmp_path):
+    m = _manager(tmp_path)
+    _mk_repo(m, "v0.1.0")
+    res = m.apply_workspace(m.repos_dir, on_old="move")
+    assert res["changed"] is False
+    assert (m.repos_dir / "dsh-v0.1.0").exists()
 
 
 # ---------------- stop ----------------

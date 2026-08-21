@@ -51,6 +51,7 @@ class Api:
             "node": node,
             "running": self.m.running,
             "running_tag": self.m.config.get("last_tag"),
+            "workspace": str(self.m.repos_dir),
         }
 
     # ---------- versions ----------
@@ -81,6 +82,13 @@ class Api:
 
     def set_theme(self, theme: str) -> str:
         return self._run_sync(lambda: self.m.set_theme(theme))
+
+    # ---------- workspace ----------
+    def preview_workspace(self, path: str) -> dict:
+        return self._run_sync(lambda: self.m.preview_workspace(path))
+
+    def apply_workspace(self, path: str, on_old: str) -> dict:
+        return self._run_sync(lambda: self.m.apply_workspace(path, on_old))
 
     # ---------- node download ----------
     def open_node_download(self):

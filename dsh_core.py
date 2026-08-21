@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import threading
@@ -80,10 +81,12 @@ class DSHManager:
         self.data_dir = Path(data_dir) if data_dir else _default_data_dir()
         self.data_dir.mkdir(parents=True, exist_ok=True)
         self.config_path = self.data_dir / "config.json"
-        self.repos_dir = self.data_dir / "repos"
-        self.repos_dir.mkdir(parents=True, exist_ok=True)
         self.config = self._default_config()
         self._load_config()
+        # 源码目录: 优先用配置的工作区, 否则默认 data_dir/repos
+        ws = self.config.get("workspace")
+        self.repos_dir = Path(ws) if ws else (self.data_dir / "repos")
+        self.repos_dir.mkdir(parents=True, exist_ok=True)
         self._proc = None          # 当前 DSH 子进程
         self._proc_pid: int | None = None
         self._srv_port = 3080
@@ -96,6 +99,7 @@ class DSHManager:
             "cached_versions": [],
             "last_tag": None,
             "theme": "dark",
+            "workspace": None,
         }
 
     def _load_config(self):
@@ -271,11 +275,54 @@ class DSHManager:
 
     # ---------- app-facing helpers ----------
     def set_theme(self, theme: str) -> str:
-        if theme not in ("dark", "light"):
+        if theme not in ("dark", "light", "system"):
             theme = "dark"
         self.config["theme"] = theme
         self.save_config()
         return theme
+
+    def _resolve_ws(self, path: str | Path) -> Path:
+        p = Path(path).expanduser()
+        return p if p.is_absolute() else (self.data_dir / p)
+
+    def preview_workspace(self, path: str | Path) -> dict:
+        """探测把工作区切到 path 后的情况(是否相同、旧路径源码数量)。用于前端决定是否弹窗。"""
+        new = self._resolve_ws(path)
+        old = self.repos_dir
+        same = os.path.normcase(str(new.resolve())) == os.path.normcase(str(old.resolve()))
+        old_count = 0
+        if old.exists():
+            old_count = sum(1 for x in old.iterdir()
+                            if x.is_dir() and (x / "package.json").exists())
+        return {
+            "same": bool(same),
+            "old_count": old_count,
+            "old_path": str(old),
+            "new_path": str(new),
+            "will_prompt": bool((not same) and old_count > 0),
+        }
+
+    def apply_workspace(self, path: str | Path, on_old: str = "leave") -> dict:
+        """切换工作区。on_old: move=把旧源码移动到新路径 / delete=删掉旧源码 / leave=不动旧源码。"""
+        if on_old not in ("move", "delete", "leave"):
+            on_old = "leave"
+        new = self._resolve_ws(path)
+        old = self.repos_dir
+        if os.path.normcase(str(new.resolve())) == os.path.normcase(str(old.resolve())):
+            return {"changed": False, "moved": 0, "action": "none", "new_path": str(new)}
+        new.mkdir(parents=True, exist_ok=True)
+        moved = 0
+        if on_old == "move" and old.exists():
+            for item in old.iterdir():
+                if item.is_dir():
+                    shutil.move(str(item), str(new / item.name))
+                    moved += 1
+        elif on_old == "delete" and old.exists():
+            shutil.rmtree(old, ignore_errors=True)
+        self.config["workspace"] = str(new)
+        self.repos_dir = new
+        self.save_config()
+        return {"changed": True, "moved": moved, "action": on_old, "new_path": str(new)}
 
     def local_repos(self) -> list[dict]:
         """扫描已克隆的源码目录, 返回 [{tag, path}]。"""
