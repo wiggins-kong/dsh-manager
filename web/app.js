@@ -29,6 +29,7 @@
     btnRun: $("btn-run"),
     btnOpen: $("btn-open"),
     btnStop: $("btn-stop"),
+    btnDelete: $("btn-delete"),
     log: $("log"),
   };
 
@@ -47,6 +48,11 @@
     els.log.scrollTop = els.log.scrollHeight;
   }
 
+  // Python 侧 (Api._emit_log) 通过 evaluate_js 推送的日志接收器。
+  // 注意: pywebview 的 js_api 不能把 JS 函数传给 Python(序列化后变 null),
+  // 所以日志走这个全局函数, 而不是 api 方法的 on_log 参数。
+  window.__dsh_log = log;
+
   function clearLog() { els.log.textContent = ""; }
 
   function setControls(cloned) {
@@ -54,6 +60,7 @@
     els.btnRun.disabled = !cloned;
     els.btnOpen.disabled = !cloned;
     els.btnStop.disabled = !cloned || !state.running;
+    els.btnDelete.disabled = !cloned;
   }
 
   async function refreshVersions(force) {
@@ -131,7 +138,7 @@
     clearLog();
     log("开始下载源码 " + tag + " …（" + (state.proxyOn ? "走代理" : "直连") + "）\n");
     try {
-      const res = await webview.api.clone(tag, function (line) { log(line); });
+      const res = await webview.api.clone(tag);
       state.local[tag] = res.path;
       renderLocal();
       renderVersions();
@@ -150,7 +157,7 @@
     clearLog();
     log("正在准备并启动后端 " + tag + " …\n");
     try {
-      const res = await webview.api.start(tag, function (line) { log(line); });
+      const res = await webview.api.start(tag);
       state.running = true;
       toast("后端已启动 (端口 " + res.port + ")");
       setControls(true);
@@ -175,6 +182,29 @@
       toast("停止失败：" + (e && e.message ? e.message : e));
     } finally {
       els.btnStop.disabled = false;
+    }
+  }
+
+  async function runDelete(tag) {
+    if (!confirm("确定删除已下载的源码「" + tag + "」吗？\n此操作不可恢复。")) return;
+    els.btnDelete.disabled = true;
+    try {
+      await webview.api.delete(tag);
+      delete state.local[tag];
+      clearLog();
+      log("已删除 " + tag + " 的本地源码。");
+      if (state.selected === tag) {
+        state.selected = null;
+        els.detail.classList.add("hidden");
+        els.detailEmpty.classList.remove("hidden");
+      }
+      renderLocal();
+      renderVersions();
+      toast("已删除：" + tag);
+    } catch (e) {
+      toast("删除失败：" + (e && e.message ? e.message : e));
+    } finally {
+      els.btnDelete.disabled = false;
     }
   }
 
@@ -311,6 +341,7 @@
     $("btn-clone").addEventListener("click", () => state.selected && runClone(state.selected));
     $("btn-run").addEventListener("click", () => state.selected && runStart(state.selected));
     $("btn-stop").addEventListener("click", runStop);
+    $("btn-delete").addEventListener("click", () => state.selected && runDelete(state.selected));
     $("btn-open").addEventListener("click", () => webview.api.open_web().catch((e) => toast("打开失败：" + e.message)));
     $("btn-clear-log").addEventListener("click", clearLog);
     $("btn-settings").addEventListener("click", openSettings);

@@ -30,6 +30,7 @@
 | 代理设置 | 开关 + 主机/端口(默认预填 Clash 混合端口 `127.0.0.1:7897`), 对 GitHub API 与 git 均生效 |
 | 主题 | 跟随系统(自动) / 深色 / 浅色, 实时切换 |
 | 工作区路径 | 可自定义源码存放目录; 切换时处理旧源码(移动/删除/不动) |
+| 删除源码 | 详情面板可删除已下载的源码目录(运行中的版本禁止删除) |
 | 持久化 | 所有配置存 `data/config.json`(代理/缓存版本/主题/工作区/上次运行版本) |
 
 ---
@@ -112,24 +113,27 @@ uv pip install --python .venv/Scripts/python.exe pytest pyinstaller   # 开发/�
 1. **语言**: 代码注释、前端文案、提交信息一律用**中文**(面向中文用户/开发者)。
 2. **UI 风**: 干净的玻璃/现代/马赛克风(Mica), **不要**红章/古风花哨皮肤; 字体偏好微软雅黑 Semibold(MsyhSb); 主题通过设置弹窗切换, 不在工具栏加开关。
 3. **Windows pnpm 是 `.cmd` 垫片**: 直接 subprocess 会找不到, 必须经 `cmd /c` —— 由 `_spawn_cmd()` 统一处理; 新增外部命令调用时注意。
-4. **目录名前缀**: 已下载源码目录统一 `dsh-<版本>`; 命名直接决定"是否已下载"判断, 改动须同步 `repo_dir_for` 与测试 `test_repo_dir_for_strips_prefix`。
-5. **配置合并**: `_load_config` 用 `default_config` + `update` 合并, 新增配置项记得加进 `_default_config()`。
-6. **测试先行**: 核心逻辑改完必跑 `pytest`; 有 DOM/时序类问题时多写 `_run_sync` 桥接层测试。
+4. **子进程一律隐藏窗口**: Windows 下 Popen 必须带 `CREATE_NO_WINDOW`(`_hidden_popen_kwargs()`), 否则 cmd/git 会弹出黑窗。
+5. **js_api 不能传 JS 函数**: pywebview 的 js_api 参数走 JSON 序列化, JS 函数会变 `null`(on_log 回调从未生效!)。日志推送必须走 `Api._emit_log` → `window.evaluate_js` → 前端 `window.__dsh_log`。新增强日志功能时照此模式。
+6. **目录名前缀**: 已下载源码目录统一 `dsh-<版本>`; 命名直接决定"是否已下载"判断, 改动须同步 `repo_dir_for` 与测试 `test_repo_dir_for_strips_prefix`。
+7. **配置合并**: `_load_config` 用 `default_config` + `update` 合并, 新增配置项记得加进 `_default_config()`。
+8. **测试先行**: 核心逻辑改完必跑 `pytest`; 有 DOM/时序类问题时多写桥接层测试。
 
 ---
 
-## 六、开发进度(截至提交 810358f)
+## 六、开发进度(截至工作区未提交修复)
 
 按时间倒序, 需求在 `docs/` 设计文档与 git 历史可见。
 
+- **(工作区未提交·实机反馈修复)**: ① 新增「删除源码」; ② 子进程加 `CREATE_NO_WINDOW` 不再弹黑窗; ③ 修复日志机制(js_api 传 JS 函数会变 null, 改 `_emit_log` evaluate_js 推送, 进度实时可见); ④ `start_dsh` 加进程存活检查 + 端口就绪探测, 失败明确报错; ⑤ clone/install/build/启动分阶段日志; ⑥ `clone_tag` 复用判定从"只看 .git"改为"package.json + .git 都不缺", 修复"下载中断残留被误判为已下载"的 bug, 残缺目录自动清理重下; ⑦ `start_dsh` 智能跳过(`node_modules/.pnpm` 在则跳过 install, `apps/web/dist` 在则跳过 build), 二次运行秒级启动。
 - **0e965f2 / 99f5173 (主题 + 工作区)**: 前端主题支持 `system`(跟随系统实时切换); 源码路径设置 + 原生目录浏览; 切换工作区时弹窗处理旧源码(移动/删除/不动), 均配测试。
 - **c859b5b (桥接时序)**: 修复 pywebview 桥就绪时序, 不再开局误判为普通浏览器导致点击/刷新/设置失效。
 - **714a912 (兼容与打包)**: 版本识别支持官方 `dsh-` 前缀; Windows pnpm `.cmd` 垫片; clone 复用与 `.dsh-tag` 标记; 补齐 README 与打包配置。
 - **7d88a03 / 0e0e0c9 (骨架)**: 前端界面 + pywebview 入口; dsh_core 核心逻辑 + 测试。
 - **35ddfc8 (设计)**: DSH 管理器设计文档。
-- **810358f (最新)**: 修复 `Api.start` 源码目录重复 `dsh-` 前缀导致的"未下载"误报; 待克隆路径显示真实工作区。
+- **810358f**: 修复 `Api.start` 源码目录重复 `dsh-` 前缀导致的"未下载"误报; 待克隆路径显示真实工作区。
 
-**质量状态**: `pytest` 23/23 通过; 已打包 exe 可运行; 远程仓库已建立并推送。
+**质量状态**: `pytest` 31/31 通过; 已打包 exe 可运行; 远程仓库已建立并推送。
 
 ---
 

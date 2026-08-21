@@ -9,6 +9,7 @@ import json
 import os
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import threading
@@ -27,6 +28,41 @@ def _spawn_cmd(argv: list[str]) -> list[str]:
     if os.name == "nt" and argv and argv[0] == "pnpm":
         return ["cmd", "/c"] + argv
     return argv
+
+
+def _hidden_popen_kwargs(extra_flags: int = 0) -> dict:
+    """Windows 下用 CREATE_NO_WINDOW 隐藏子进程命令行窗口(不弹黑窗)。
+
+    注意: 不加这个 flag 时, cmd /c pnpm ... / git 会弹出新的控制台窗口, 很难看。
+    """
+    if os.name != "nt":
+        return {}
+    flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) | extra_flags
+    return {"creationflags": flags}
+
+
+def _rmtree_force(path, on_log=None) -> None:
+    """强制递归删除目录, 专为 Windows 编写。
+
+    git 会把 `.git/objects` 里的 pack 文件设为**只读**(444), 直接 shutil.rmtree
+    会抛 PermissionError 且 `ignore_errors=True` 会静默吞掉, 导致目录残留半截、
+    用户毫无感知。这里用 onerror 回调先清只读属性再重试; 仍失败(如被其他进程
+    占用)则明确报错, 绝不静默留下残留。
+    """
+    def _onerror(func, p, exc):
+        try:
+            os.chmod(p, stat.S_IWRITE)
+            func(p)
+            return
+        except Exception as e:  # noqa: BLE001
+            raise OSError(f"无法删除 {p} ({e}), 可能被其他程序占用") from e
+
+    try:
+        shutil.rmtree(path, onerror=_onerror)
+    except OSError as e:
+        if on_log:
+            on_log(f"[删除失败] {path.name}: {e}")
+        raise
 
 
 def _exe_dir() -> Path:
@@ -182,20 +218,44 @@ class DSHManager:
         """返回某 tag 源码应存放的目录路径(与 clone_tag 的命名一致, 去掉重复前缀)。"""
         return self.repos_dir / f"dsh-{_dir_clean(tag)}"
 
+    def _downloaded(self, target: Path) -> bool:
+        """只有 package.json + .git 都存在的目录才算真正的完整克隆。
+
+        曾发生: git clone 中断只留下 .git 而没有源码文件, 若只看 .git 会误判为
+        "已下载" 而不再重新克隆 → 界面显示已下载但实际没有源码。故必须两者兼有。
+        """
+        return (target / "package.json").exists() and (target / ".git").exists()
+
     def clone_tag(self, tag: str, on_log=None) -> str:
         target = self.repo_dir_for(tag)
-        # 已克隆过则直接复用
-        if (target / ".git").exists():
+        # 只有完整克隆才复用; 残缺(缺源码/只有.git)一律视为未下载
+        if self._downloaded(target):
             if on_log:
                 on_log(f"[提示] {tag} 已在本机, 无需重新下载")
             return str(target)
-        if target.exists() and any(target.iterdir()):
-            raise FileExistsError(f"目标目录非空, 无法克隆: {target}")
+        # 清理历史下载失败留下的半成品目录, 保证重新克隆从干净状态开始
+        if target.exists():
+            if on_log:
+                on_log(f"[清理] {tag} 克隆不完整, 移除残留目录: {target.name}")
+            _rmtree_force(target, on_log)
         target.mkdir(parents=True, exist_ok=True)
-        cmd = ["git", "clone", "--depth", "1", "--branch", tag,
-               *self.git_proxy_args(), REPO_URL, str(target)]
-        self._run_stream(cmd, on_log, cwd=self.data_dir)
+        if on_log:
+            on_log(f"[下载] git clone --depth 1 --branch {tag} …")
+        try:
+            cmd = ["git", "clone", "--depth", "1", "--branch", tag,
+                   *self.git_proxy_args(), REPO_URL, str(target)]
+            self._run_stream(cmd, on_log, cwd=self.data_dir)
+        except Exception:
+            # 克隆失败时清掉半成品, 避免残留目录污染工作区/下次误判
+            if target.exists():
+                try:
+                    _rmtree_force(target, on_log)
+                except Exception:  # noqa: BLE001  清理失败不掩盖最初错误
+                    pass
+            raise
         (target / ".dsh-tag").write_text(tag, encoding="utf-8")
+        if on_log:
+            on_log(f"[完成] {tag} 源码已下载到 {target}")
         return str(target)
 
     def _run_stream(self, cmd, on_log, cwd=None, check=True):
@@ -203,6 +263,7 @@ class DSHManager:
         proc = subprocess.Popen(
             cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
             text=True, encoding="utf-8", errors="replace", cwd=cwd,
+            **_hidden_popen_kwargs(),
         )
         for line in proc.stdout:
             line = line.rstrip("\n")
@@ -219,17 +280,35 @@ class DSHManager:
         if not (repo_dir / "package.json").exists():
             raise FileNotFoundError(f"找不到 DSH 源码目录: {repo_dir}")
         self._srv_port = port
-        # 先确保依赖与构建产物就绪
-        for cmd in (["pnpm", "install"], ["pnpm", "run", "build"]):
-            self._run_stream(cmd, on_log, cwd=repo_dir)
-        # 后台启动 dsh web
+        # 智能跳过已完成的步骤, 避免每次点"运行"都全量 install/build(很慢):
+        #  - node_modules/.pnpm 存在 => 依赖已装, 跳过 pnpm install
+        #  - apps/web/dist 存在     => 前端已构建, 跳过 pnpm run build
+        installed = (repo_dir / "node_modules" / ".pnpm").exists()
+        web_dist = repo_dir / "apps" / "web" / "dist"
+        built = web_dist.exists()
+
+        if on_log:
+            on_log("[1/3] 依赖检查: " + ("跳过(pnpm 依赖已装)"
+                                          if installed else "pnpm install …"))
+        if not installed:
+            self._run_stream(["pnpm", "install"], on_log, cwd=repo_dir)
+
+        if on_log:
+            on_log("[2/3] 前端构建: " + ("跳过(apps/web/dist 已存在)"
+                                          if built else "pnpm run build …"))
+        if not built:
+            self._run_stream(["pnpm", "run", "build"], on_log, cwd=repo_dir)
+
+        # 后台启动 dsh web; 加 --no-open 禁止 DSH 自动打开浏览器(管理器自带"打开前端"按钮)
         self.stop_dsh()
+        if on_log:
+            on_log(f"[3/3] 启动后端: pnpm dsh web --port {port} …")
         proc = subprocess.Popen(
-            _spawn_cmd(["pnpm", "dsh", "web", "--port", str(port)]),
+            _spawn_cmd(["pnpm", "dsh", "web", "--port", str(port), "--no-open"]),
             cwd=repo_dir,
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
             text=True, encoding="utf-8", errors="replace",
-            creationflags=getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0),
+            **_hidden_popen_kwargs(getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)),
         )
         self._proc = proc
         self._proc_pid = proc.pid
@@ -241,9 +320,46 @@ class DSHManager:
                     on_log(line)
 
         threading.Thread(target=_pump, daemon=True).start()
+
+        # ① 快速存活检查: 启动后立刻崩溃(如脚本不存在/命令错误)则明确报错
+        time.sleep(1.5)
+        if proc.poll() is not None:
+            self._proc = None
+            self._proc_pid = None
+            raise RuntimeError(
+                f"后端进程启动后立即退出(exit {proc.returncode}), "
+                "请查看上方日志中的具体错误")
+
+        # ② 端口就绪探测: 轮询 HTTP 直到可访问, 区分 就绪/进程死亡/超时
+        status = self._wait_ready(self.web_url())
+        if status == "dead":
+            self._proc = None
+            self._proc_pid = None
+            raise RuntimeError("后端进程在启动过程中退出, 请查看上方日志中的具体错误")
+        if on_log:
+            if status == "ready":
+                on_log(f"[就绪] 后端已启动: {self.web_url()}")
+            else:
+                on_log(f"[提示] 进程仍在运行但端口暂未就绪(>60s), "
+                       "可稍后点击「打开前端」重试")
+
         self.config["last_tag"] = self._tag_from_repo(repo_dir)
         self.save_config()
         return {"pid": proc.pid, "port": port, "status": "running"}
+
+    def _wait_ready(self, url: str, timeout: float = 60.0,
+                    interval: float = 1.0) -> str:
+        """轮询 HTTP 端口直到可访问。返回 'ready' | 'dead' | 'timeout'。"""
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            if self._proc is not None and self._proc.poll() is not None:
+                return "dead"
+            try:
+                requests.get(url, timeout=2)
+                return "ready"
+            except requests.RequestException:
+                time.sleep(interval)
+        return "timeout"
 
     @staticmethod
     def _tag_from_repo(repo_dir: Path) -> str:
@@ -339,6 +455,19 @@ class DSHManager:
                         if marker.exists() else d.name.removeprefix("dsh-")
                     out.append({"tag": tag, "path": str(d)})
         return out
+
+    def delete_tag(self, tag: str) -> bool:
+        """删除某版本已下载的源码目录。正在运行的版本禁止删除。"""
+        if self.running and self.config.get("last_tag") == tag:
+            raise RuntimeError(f"版本 {tag} 正在运行, 请先停止后端再删除")
+        target = self.repo_dir_for(tag)
+        if not target.exists():
+            return False
+        _rmtree_force(target)   # 强制删除(.git 只读文件会先清属性再删)
+        if target.exists():
+            raise RuntimeError(
+                f"{tag} 目录未完全删除, 可能被其他程序占用, 请关闭占用它的程序后重试")
+        return True
 
     @property
     def running(self) -> bool:

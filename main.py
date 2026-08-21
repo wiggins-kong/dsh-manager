@@ -4,6 +4,7 @@
 """
 from __future__ import annotations
 
+import json
 import os
 import sys
 import threading
@@ -40,6 +41,18 @@ class Api:
             raise RuntimeError(out["err"])
         return out["ok"]
 
+    # 日志推送: pywebview 的 js_api 参数无法传 JS 函数(JSON 序列化后变 null),
+    # 所以不能用 on_log 回调。改为 Python 主动 evaluate_js 推送日志行,
+    # evaluate_js 线程安全, 可从任意工作线程调用, 实时到达前端。
+    def _emit_log(self, line: str) -> None:
+        try:
+            win = webview.windows[0] if webview.windows else None
+            if win is None:
+                return
+            win.evaluate_js(f"window.__dsh_log({json.dumps(str(line))});")
+        except Exception:  # noqa: BLE001  页面未就绪等场景下静默丢弃
+            pass
+
     # ---------- state ----------
     def get_state(self) -> dict:
         node = self.m.node_available()
@@ -59,15 +72,19 @@ class Api:
         return self._run_sync(lambda: self.m.fetch_versions(force=bool(force)))
 
     # ---------- clone ----------
-    def clone(self, tag: str, on_log=None) -> dict:
-        return self._run_sync(lambda: {"path": self.m.clone_tag(tag, on_log=on_log)})
+    def clone(self, tag: str) -> dict:
+        return self._run_sync(lambda: {"path": self.m.clone_tag(tag, on_log=self._emit_log)})
+
+    def delete(self, tag: str) -> bool:
+        """删除某版本已下载的源码(运行中的版本会被拒绝)。"""
+        return self._run_sync(lambda: self.m.delete_tag(str(tag)))
 
     # ---------- run / stop ----------
-    def start(self, tag: str, on_log=None) -> dict:
+    def start(self, tag: str) -> dict:
         repo = self.m.repo_dir_for(tag) if tag else None
         if not repo or not (repo / "package.json").exists():
             raise FileNotFoundError(f"未下载版本 {tag} 的源码，请先下载")
-        return self._run_sync(lambda: self.m.start_dsh(repo, on_log=on_log))
+        return self._run_sync(lambda: self.m.start_dsh(repo, on_log=self._emit_log))
 
     def stop(self) -> bool:
         return self._run_sync(lambda: self.m.stop_dsh())

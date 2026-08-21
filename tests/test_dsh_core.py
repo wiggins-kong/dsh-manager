@@ -7,7 +7,7 @@ from unittest import mock
 import pytest
 
 import dsh_core
-from dsh_core import DSHManager, sort_versions
+from dsh_core import DSHManager, sort_versions, _spawn_cmd
 
 
 # ---------------- sort_versions ----------------
@@ -130,6 +130,50 @@ def test_clone_tag_command(mock_popen, tmp_path):
     assert "--depth" in cmd
     assert "http.proxy=http://127.0.0.1:7897" in " ".join(cmd)
     assert path.endswith("dsh-v0.1.0")
+
+
+@mock.patch("dsh_core.subprocess.Popen")
+def test_clone_reuses_complete(mock_popen, tmp_path):
+    """package.json + .git 都齐全才算已下载, 复用不再重新克隆。"""
+    m = _manager(tmp_path)
+    d = _mk_repo(m, "v0.1.0")
+    (d / ".git").mkdir()
+    path = m.clone_tag("v0.1.0")
+    mock_popen.assert_not_called()
+    assert path == str(d)
+
+
+@mock.patch("dsh_core.subprocess.Popen")
+def test_clone_cleans_partial(mock_popen, tmp_path):
+    """只有 .git 的残缺目录(下载中断残留)要清理并重新克隆。"""
+    class FakeProc:
+        returncode = 0
+        def __init__(self, *a, **k):
+            self.stdout = iter([])
+        def wait(self):
+            return 0
+    mock_popen.side_effect = FakeProc
+    m = _manager(tmp_path)
+    d = m.repo_dir_for("v0.1.0")
+    d.mkdir(parents=True)
+    (d / ".git").mkdir()          # 只有 .git, 无源码 → 视为残缺
+    path = m.clone_tag("v0.1.0")
+    assert path == str(d)
+    mock_popen.assert_called_once()      # 真的重新克隆了
+    assert (d / ".dsh-tag").exists()     # 克隆完成标记
+
+
+@mock.patch("dsh_core.subprocess.Popen")
+def test_clone_fails_cleans_partial(mock_popen, tmp_path):
+    """克隆失败时清掉半成品目录, 避免残留污染工作区。"""
+    mock_popen.side_effect = RuntimeError("boom")
+    m = _manager(tmp_path)
+    d = m.repo_dir_for("v0.1.0")
+    d.mkdir(parents=True)
+    (d / ".git").mkdir()
+    with pytest.raises(RuntimeError):
+        m.clone_tag("v0.1.0")
+    assert not d.exists()   # 失败残留被清理
 
 
 # ---------------- fetch_versions ----------------
@@ -256,6 +300,46 @@ def test_apply_same_noop(tmp_path):
     assert (m.repos_dir / "dsh-v0.1.0").exists()
 
 
+# ---------------- delete ----------------
+
+
+def test_delete_tag(tmp_path):
+    m = _manager(tmp_path)
+    d = _mk_repo(m, "v0.1.0")
+    assert m.delete_tag("v0.1.0") is True
+    assert not d.exists()
+    assert m.local_repos() == []
+
+
+def test_delete_tag_not_exists(tmp_path):
+    m = _manager(tmp_path)
+    assert m.delete_tag("v0.1.0") is False
+
+
+def test_delete_tag_running_forbidden(tmp_path):
+    m = _manager(tmp_path)
+    _mk_repo(m, "v0.1.0")
+    m._proc = mock.Mock()
+    m._proc.poll.return_value = None   # 模拟进程存活
+    m.config["last_tag"] = "v0.1.0"
+    with pytest.raises(RuntimeError):
+        m.delete_tag("v0.1.0")
+    assert m.repo_dir_for("v0.1.0").exists()   # 未被删除
+
+
+def test_delete_tag_readonly_git_objects(tmp_path):
+    """git 的 .git/objects 只读 pack 文件也能被强删, 不残留半截目录。"""
+    m = _manager(tmp_path)
+    d = _mk_repo(m, "v0.1.0")
+    pack = d / ".git" / "objects"
+    pack.mkdir(parents=True)
+    f = pack / "x.pack"
+    f.write_bytes(b"x" * 16)
+    os.chmod(f, 0o444)                        # 只读: S_IREAD
+    assert m.delete_tag("v0.1.0") is True
+    assert not d.exists()                     # 整个目录被清掉, 无残留
+
+
 # ---------------- stop ----------------
 
 @mock.patch("dsh_core.subprocess.run")
@@ -266,3 +350,67 @@ def test_stop_dsh(mock_run, tmp_path):
     assert m.stop_dsh() is True
     cmd = mock_run.call_args[0][0]
     assert "taskkill" in cmd or "kill" in " ".join(cmd)
+
+
+# ---------------- start (智能跳过 install/build) ----------------
+
+def _mk_built_repo(m, tag):
+    """构造一个依赖已装、前端已构建的完整 DSH 仓库。"""
+    repo = m.repo_dir_for(tag)
+    repo.mkdir(parents=True)
+    (repo / "package.json").write_text("{}")
+    (repo / "node_modules" / ".pnpm").mkdir(parents=True)
+    (repo / "apps" / "web" / "dist").mkdir(parents=True)
+    return repo
+
+
+def _fake_popen(mock_popen):
+    class FakeProc:
+        returncode = 0
+        def __init__(self, *a, **k):
+            self.stdout = iter([])
+            self.pid = 9999
+        def poll(self):
+            return None
+        def wait(self):
+            return 0
+    mock_popen.side_effect = lambda *a, **k: FakeProc()
+
+
+@mock.patch("dsh_core.time.sleep")
+@mock.patch("dsh_core.requests.get")
+@mock.patch("dsh_core.subprocess.run")
+@mock.patch("dsh_core.subprocess.Popen")
+def test_start_skips_install_and_build_when_ready(
+        mock_popen, mock_run, mock_get, mock_sleep, tmp_path):
+    """依赖已装 + 前端已构建 => 只启动 dsh web, 不再 install/build。"""
+    mock_run.return_value.returncode = 0      # stop_dsh 用
+    mock_get.return_value = None             # _wait_ready 视为就绪
+    _fake_popen(mock_popen)
+    m = _manager(tmp_path)
+    repo = _mk_built_repo(m, "v0.1.0")
+    m.start_dsh(repo, on_log=lambda l: None)
+    assert mock_popen.call_count == 1        # 只起 dsh web
+    cmd = mock_popen.call_args_list[0].args[0]
+    assert cmd == _spawn_cmd(["pnpm", "dsh", "web", "--port", "3080", "--no-open"])
+
+
+@mock.patch("dsh_core.time.sleep")
+@mock.patch("dsh_core.requests.get")
+@mock.patch("dsh_core.subprocess.run")
+@mock.patch("dsh_core.subprocess.Popen")
+def test_start_builds_when_missing(
+        mock_popen, mock_run, mock_get, mock_sleep, tmp_path):
+    """无依赖/无前端产物 => 依次 install -> build -> dsh web。"""
+    mock_run.return_value.returncode = 0
+    mock_get.return_value = None
+    _fake_popen(mock_popen)
+    m = _manager(tmp_path)
+    repo = m.repo_dir_for("v0.1.0")
+    repo.mkdir(parents=True)
+    (repo / "package.json").write_text("{}")
+    m.start_dsh(repo, on_log=lambda l: None)
+    cmds = [c.args[0] for c in mock_popen.call_args_list]
+    assert cmds[0] == _spawn_cmd(["pnpm", "install"])
+    assert cmds[1] == _spawn_cmd(["pnpm", "run", "build"])
+    assert cmds[2] == _spawn_cmd(["pnpm", "dsh", "web", "--port", "3080", "--no-open"])
