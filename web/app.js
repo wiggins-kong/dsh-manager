@@ -192,35 +192,112 @@
     }
   }
 
+  /* ---------- 主题 (深色/浅色/跟随系统) ---------- */
+  function systemDark() {
+    return window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
+  }
+  function applyTheme(theme) {
+    const resolved = theme === "system" ? (systemDark() ? "dark" : "light") : theme;
+    document.documentElement.dataset.theme = resolved;
+  }
+  // 实时跟随系统深浅色切换
+  if (window.matchMedia) {
+    window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => {
+      if (state.theme === "system") applyTheme("system");
+    });
+  }
+
   /* ---------- 设置弹窗 ---------- */
   let currentProxy = null;
+  let pendingWs = null;   // 待处理的工作区切换 {new_path, old_count}
+
+  async function refreshStateLocal() {
+    const st = await webview.api.get_state();
+    state.local = {};
+    (st.local || []).forEach((r) => { state.local[r.tag] = r.path; });
+    state.workspace = st.workspace;
+    renderLocal();
+    renderVersions();
+    if (state.selected) selectVersion(state.selected);
+  }
+
   function openSettings() {
     currentProxy = state.proxy;
     $("proxy-enabled").checked = currentProxy.enabled;
     $("proxy-host").value = currentProxy.host;
     $("proxy-port").value = currentProxy.port;
-    $("theme-select").value = document.documentElement.dataset.theme || "dark";
+    $("theme-select").value = state.theme || "dark";
+    $("workspace-path").value = state.workspace || "";
     $("settings-modal").classList.remove("hidden");
     $("proxy-host").focus();
   }
   function closeSettings() { $("settings-modal").classList.add("hidden"); }
+
+  async function openWorkspaceDialog() {
+    try {
+      const picked = await window.pywebview.create_file_dialog(window.pywebview.FOLDER_DIALOG);
+      if (picked) $("workspace-path").value = String(picked);
+    } catch (e) {
+      toast("无法打开目录选择：" + (e && e.message ? e.message : e));
+    }
+  }
+
+  async function doApplyWorkspace(on_old) {
+    const target = pendingWs.new_path;
+    pendingWs = null;
+    closeWsModal();
+    try {
+      const res = await webview.api.apply_workspace(target, on_old);
+      await refreshStateLocal();
+      closeSettings();
+      toast(on_old === "move" ? "已迁移源码到新路径" :
+            on_old === "delete" ? "已删除旧源码并切换路径" : "已切换源码路径");
+    } catch (e) {
+      closeSettings();
+      toast("切换失败：" + (e && e.message ? e.message : e));
+    }
+  }
 
   async function saveSettings() {
     const enabled = $("proxy-enabled").checked;
     const host = $("proxy-host").value.trim() || "127.0.0.1";
     const port = parseInt($("proxy-port").value, 10) || 7897;
     const theme = $("theme-select").value;
+    const newPath = $("workspace-path").value.trim();
     try {
       await webview.api.save_proxy(enabled, host, port);
       await webview.api.set_theme(theme);
-      document.documentElement.dataset.theme = theme;
+      state.theme = theme;
       state.proxy = { enabled, host, port };
       state.proxyOn = enabled;
+      applyTheme(theme);
+
+      // 工作区处理
+      if (newPath) {
+        const prev = await webview.api.preview_workspace(newPath);
+        if (!prev.same) {
+          if (prev.will_prompt && prev.old_count > 0) {
+            pendingWs = prev;
+            $("ws-count").textContent = prev.old_count;
+            openWsModal();
+            return;  // 等用户在弹窗里选
+          }
+          await webview.api.apply_workspace(prev.new_path, "leave");
+          await refreshStateLocal();
+        }
+      }
       closeSettings();
       toast("设置已保存");
     } catch (e) {
       toast("保存失败：" + (e && e.message ? e.message : e));
     }
+  }
+
+  /* ---------- 旧源码处理弹窗 ---------- */
+  function openWsModal() { $("ws-modal").classList.remove("hidden"); }
+  function closeWsModal() {
+    $("ws-modal").classList.add("hidden");
+    pendingWs = null;
   }
 
   /* ---------- 事件绑定 ---------- */
@@ -237,9 +314,16 @@
       if (e.target === $("settings-modal")) closeSettings();
     });
     $("btn-settings-save").addEventListener("click", saveSettings);
+    $("btn-workspace-browse").addEventListener("click", openWorkspaceDialog);
+    $("ws-move").addEventListener("click", () => doApplyWorkspace("move"));
+    $("ws-delete").addEventListener("click", () => doApplyWorkspace("delete"));
+    $("ws-leave").addEventListener("click", () => doApplyWorkspace("leave"));
+    $("ws-modal").addEventListener("click", (e) => {
+      if (e.target === $("ws-modal")) closeWsModal();
+    });
     $("btn-node-download").addEventListener("click", () => webview.api.open_node_download());
     document.addEventListener("keydown", (e) => {
-      if (e.key === "Escape") closeSettings();
+      if (e.key === "Escape") { closeWsModal(); closeSettings(); }
     });
   }
 
@@ -264,7 +348,9 @@
       state.proxy = st.proxy || { enabled: false, host: "127.0.0.1", port: 7897 };
       state.proxyOn = state.proxy.enabled;
       state.running = !!st.running;
-      document.documentElement.dataset.theme = st.theme || "dark";
+      state.theme = st.theme || "dark";
+      state.workspace = st.workspace;
+      applyTheme(state.theme);
       renderNode(st.node);
       renderVersions();
       renderLocal();

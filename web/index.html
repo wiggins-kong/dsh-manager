@@ -138,6 +138,18 @@
       </section>
 
       <section class="settings-group">
+        <h3>源码工作区</h3>
+        <div class="settings-row">
+          <label class="field" style="flex:1">
+            <span>下载路径</span>
+            <input type="text" id="workspace-path" placeholder="选择源码存放目录">
+          </label>
+          <button id="btn-workspace-browse" class="btn btn-sm" type="button">浏览…</button>
+        </div>
+        <p class="hint">之后下载的源码会放到新路径。若旧路径已有源码，保存时会询问如何处理。</p>
+      </section>
+
+      <section class="settings-group">
         <h3>外观</h3>
         <div class="settings-row">
           <label class="field">
@@ -145,6 +157,7 @@
             <select id="theme-select">
               <option value="dark">深色</option>
               <option value="light">浅色</option>
+              <option value="system">跟随系统</option>
             </select>
           </label>
         </div>
@@ -152,6 +165,25 @@
 
       <div class="modal-foot">
         <button id="btn-settings-save" class="btn btn-primary">保存</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 旧源码处理弹窗 -->
+  <div id="ws-modal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="ws-title">
+    <div class="modal">
+      <div class="modal-head">
+        <h2 id="ws-title">旧源码怎么处理？</h2>
+      </div>
+      <div class="settings-group">
+        <p class="hint" id="ws-desc" style="margin:0 0 12px;font-size:13px">
+          检测到旧路径有 <span id="ws-count">0</span> 份源码，如何把它们留在原处或搬到新路径？
+        </p>
+        <div class="settings-row" style="flex-direction:column;align-items:stretch;gap:8px">
+          <button id="ws-move" class="btn btn-accent" style="justify-content:center">移动到新路径</button>
+          <button id="ws-delete" class="btn btn-danger" style="justify-content:center">删除旧源码</button>
+          <button id="ws-leave" class="btn" style="justify-content:center">保持不动（只换新路径）</button>
+        </div>
       </div>
     </div>
   </div>
