@@ -3,7 +3,9 @@
   "use strict";
 
   const $ = (id) => document.getElementById(id);
-  const webview = window.pywebview;
+  // 注意: 不能在这里固化 webview —— 桥是异步注入的, 解析时它是 undefined。
+  // 必须在 pywebviewready / 轮询确认就绪后再赋值。因此用 let 且初始为 null。
+  let webview = null;
 
   let state = {
     versions: [],
@@ -242,7 +244,12 @@
   }
 
   /* ---------- 启动 ---------- */
+  // pywebview 的 JS 桥 (window.pywebview) 是异步注入的, 必须以 pywebviewready
+  // 事件为“就绪”信号, 否则会在桥就绪前初始化, 导致事件监听全部失效。
+  let started = false;
   async function init() {
+    if (started) return;
+    started = true;
     if (!webview || !webview.api) {
       els.nodeBadge.innerHTML = '<span class="dot"></span>请在 pywebview 中运行';
       els.versionList.innerHTML = '<li class="empty">此页面需在 DSH 管理器窗口中运行</li>';
@@ -268,9 +275,29 @@
     }
   }
 
-  if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", init);
-  } else {
-    init();
+  function boot() {
+    // 关键: 不能在开局 window.pywebview 还是 undefined 时误判为“普通浏览器”。
+    // 实测桥约在脚本解析后 50ms 才注入。因此总是: ① 监听 pywebviewready 事件;
+    // ② 轮询直到 .api 就绪。仅当长时间仍无 pywebview(判定为真·普通浏览器)才走兜底。
+    const assign = function () { if (window.pywebview && window.pywebview.api) webview = window.pywebview; };
+    window.addEventListener("pywebviewready", function () { assign(); init(); });
+    if (window.pywebview && window.pywebview.api) {
+      assign(); init();
+      return;
+    }
+    els.versionList.innerHTML = '<li class="empty">正在连接界面桥…</li>';
+    let n = 0;
+    const iv = setInterval(function () {
+      if (window.pywebview && window.pywebview.api) {
+        clearInterval(iv); assign(); init();
+      } else {
+        n++;
+        // 3s 后仍无 pywebview 对象 → 基本可判定为普通浏览器
+        if (n > 30 && !window.pywebview) { clearInterval(iv); init(); }
+        // 有 pywebview 但 15s 桥仍未就绪 → 兜底提示
+        else if (n > 150) { clearInterval(iv); init(); }
+      }
+    }, 100);
   }
+  boot();
 })();
