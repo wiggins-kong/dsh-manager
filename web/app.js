@@ -235,7 +235,7 @@
 
   async function openWorkspaceDialog() {
     try {
-      const picked = await window.pywebview.create_file_dialog(window.pywebview.FOLDER_DIALOG);
+      const picked = await webview.api.pick_folder(state.workspace || "");
       if (picked) $("workspace-path").value = String(picked);
     } catch (e) {
       toast("无法打开目录选择：" + (e && e.message ? e.message : e));
@@ -310,17 +310,12 @@
     $("btn-clear-log").addEventListener("click", clearLog);
     $("btn-settings").addEventListener("click", openSettings);
     $("btn-modal-close").addEventListener("click", closeSettings);
-    $("settings-modal").addEventListener("click", (e) => {
-      if (e.target === $("settings-modal")) closeSettings();
-    });
+    // 设置仅通过"关闭按钮"或 Esc 关闭, 点击弹窗外不关闭(避免误触)
     $("btn-settings-save").addEventListener("click", saveSettings);
     $("btn-workspace-browse").addEventListener("click", openWorkspaceDialog);
     $("ws-move").addEventListener("click", () => doApplyWorkspace("move"));
     $("ws-delete").addEventListener("click", () => doApplyWorkspace("delete"));
     $("ws-leave").addEventListener("click", () => doApplyWorkspace("leave"));
-    $("ws-modal").addEventListener("click", (e) => {
-      if (e.target === $("ws-modal")) closeWsModal();
-    });
     $("btn-node-download").addEventListener("click", () => webview.api.open_node_download());
     document.addEventListener("keydown", (e) => {
       if (e.key === "Escape") { closeWsModal(); closeSettings(); }

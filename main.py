@@ -90,6 +90,16 @@ class Api:
     def apply_workspace(self, path: str, on_old: str) -> dict:
         return self._run_sync(lambda: self.m.apply_workspace(path, on_old))
 
+    def pick_folder(self, initial_dir: str = "") -> str | None:
+        """打开 Windows 原生目录选择对话框。经 js_api 直接调用(在 GUI 线程上执行)。"""
+        win = webview.windows[0] if webview.windows else None
+        if win is None:
+            return None
+        res = win.create_file_dialog(webview.FOLDER_DIALOG, directory=str(initial_dir or ""))
+        if isinstance(res, (list, tuple)):
+            return res[0] if res else None
+        return res
+
     # ---------- node download ----------
     def open_node_download(self):
         self._run_sync(lambda: webbrowser.open(
