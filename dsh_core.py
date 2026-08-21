@@ -73,6 +73,7 @@ class DSHManager:
             "proxy": {"enabled": False, "host": "127.0.0.1", "port": 7897},
             "cached_versions": [],
             "last_tag": None,
+            "theme": "dark",
         }
 
     def _load_config(self):
@@ -233,3 +234,53 @@ class DSHManager:
 
     def web_url(self) -> str:
         return f"http://127.0.0.1:{self._srv_port}"
+
+    # ---------- app-facing helpers ----------
+    def set_theme(self, theme: str) -> str:
+        if theme not in ("dark", "light"):
+            theme = "dark"
+        self.config["theme"] = theme
+        self.save_config()
+        return theme
+
+    def local_repos(self) -> list[dict]:
+        """扫描已克隆的源码目录, 返回 [{tag, path}]。"""
+        out = []
+        if self.repos_dir.exists():
+            for d in sorted(self.repos_dir.iterdir()):
+                if d.is_dir() and (d / "package.json").exists():
+                    out.append({"tag": d.name.removeprefix("dsh-"), "path": str(d)})
+        return out
+
+    @property
+    def running(self) -> bool:
+        # 进程对象存在且未退出
+        if self._proc is not None:
+            return self._proc.poll() is None
+        return self._proc_pid is not None and self._pid_alive()
+
+    def _pid_alive(self) -> bool:
+        if self._proc_pid is None:
+            return False
+        if os.name == "nt":
+            try:
+                import ctypes
+                PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+                h = ctypes.windll.kernel32.OpenProcess(
+                    PROCESS_QUERY_LIMITED_INFORMATION, False, int(self._proc_pid))
+                if not h:
+                    return False
+                try:
+                    code = ctypes.c_ulong()
+                    ctypes.windll.kernel32.GetExitCodeProcess(h, ctypes.byref(code))
+                    return code.value == 259  # STILL_ACTIVE
+                finally:
+                    ctypes.windll.kernel32.CloseHandle(h)
+            except Exception:
+                return False
+        try:
+            os.kill(self._proc_pid, 0)
+            return True
+        except OSError:
+            return False
+

@@ -137,6 +137,23 @@ def test_fetch_versions(mock_get, tmp_path):
     assert versions[1] == "v0.9.0"
 
 
+# ---------------- theme / local repos ----------------
+
+def test_set_theme_persists(tmp_path):
+    m = _manager(tmp_path)
+    m.set_theme("light")
+    m2 = _manager(tmp_path)
+    assert m2.config["theme"] == "light"
+
+
+def test_local_repos(tmp_path):
+    m = _manager(tmp_path)
+    d = m.repos_dir / "dsh-v0.1.0"
+    d.mkdir(parents=True)
+    (d / "package.json").write_text("{}")
+    assert m.local_repos() == [{"tag": "v0.1.0", "path": str(d)}]
+
+
 # ---------------- stop ----------------
 
 @mock.patch("dsh_core.subprocess.run")
