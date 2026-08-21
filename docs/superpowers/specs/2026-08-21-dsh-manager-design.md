@@ -1,7 +1,7 @@
 # DSH 管理器 · 设计文档
 
 - 日期: 2026-08-21
-- 作者: Hermes Agent (为 wiggins 构建)
+- 作者: Hermes Agent
 - 状态: 已批准
 
 ## 1. 背景与目标

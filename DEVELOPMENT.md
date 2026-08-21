@@ -2,7 +2,7 @@
 
 > 本文件是项目的**开发交接单**: 记录当前进度、架构、约定、坑位, 以及如何在家/单位两台机器无缝接手。
 > 更新的原则: 每次提交有意义改动后, 顺手更新本文件的「开发进度」与「下一步」两节, 并 push 到 GitHub。
-> 仓库: https://github.com/wiggins-kong/dsh-manager (私有)
+> 仓库: (公开后请填写公开仓库地址)
 
 ---
 
@@ -152,7 +152,7 @@ uv pip install --python .venv/Scripts/python.exe pytest pyinstaller   # 开发/�
 
 ## 八、多机协作(在家/单位无缝接手)
 
-1. **仓库即真相**: 所有代码以 GitHub(`wiggins-kong/dsh-manager`)为准。两处 `git pull` / `push` 保持同步。
+1. **仓库即真相**: 所有代码以 **公开的 GitHub 仓库** 为准 (公开后请在此处填写仓库地址)。两处 `git pull` / `push` 保持同步。
 2. 接手第一句可对 Hermes 说:
    > 继续开发 DSH 管理器, 项目在 `E:\...dsh-manager`。先读 `DEVELOPMENT.md` 和 `README.md` 了解现状, `git pull` 对齐, 然后按「七、下一步」继续。
 3. git 流程: `git pull` 开始 → 改 → 测试通过 → `git add` → `git commit`(中文信息, 遵循 `feat/fix/docs/style/...` 前缀)→ `git push`。
