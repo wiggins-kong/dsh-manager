@@ -113,7 +113,12 @@
     els.detail.classList.remove("hidden");
     els.tag.textContent = tag;
     const cloned = !!state.local[tag];
-    els.path.textContent = cloned ? "路径：" + state.local[tag] : "路径：尚未下载（将克隆到 data/repos/" + tag + "）";
+    const ws = (state.workspace || "").replace(/[\\/]+$/, "");
+    const clean = tag.replace(/^dsh-/, "");
+    const pendingDir = ws ? ws + "\\dsh-" + clean : "data/repos/dsh-" + clean;
+    els.path.textContent = cloned
+      ? "路径：" + state.local[tag]
+      : "路径：尚未下载（将克隆到 " + pendingDir + "）";
     els.status.textContent = cloned ? "已下载" : "未下载";
     els.status.className = "badge" + (cloned ? " badge-ok" : "");
     setControls(cloned);

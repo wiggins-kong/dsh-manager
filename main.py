@@ -64,10 +64,10 @@ class Api:
 
     # ---------- run / stop ----------
     def start(self, tag: str, on_log=None) -> dict:
-        if tag and not (self.m.repos_dir / f"dsh-{tag}").exists():
+        repo = self.m.repo_dir_for(tag) if tag else None
+        if not repo or not (repo / "package.json").exists():
             raise FileNotFoundError(f"未下载版本 {tag} 的源码，请先下载")
-        return self._run_sync(lambda: self.m.start_dsh(
-            self.m.repos_dir / f"dsh-{tag}", on_log=on_log))
+        return self._run_sync(lambda: self.m.start_dsh(repo, on_log=on_log))
 
     def stop(self) -> bool:
         return self._run_sync(lambda: self.m.stop_dsh())

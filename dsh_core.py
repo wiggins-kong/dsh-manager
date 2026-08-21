@@ -178,8 +178,12 @@ class DSHManager:
         return versions
 
     # ---------- clone ----------
+    def repo_dir_for(self, tag: str) -> Path:
+        """返回某 tag 源码应存放的目录路径(与 clone_tag 的命名一致, 去掉重复前缀)。"""
+        return self.repos_dir / f"dsh-{_dir_clean(tag)}"
+
     def clone_tag(self, tag: str, on_log=None) -> str:
-        target = self.repos_dir / f"dsh-{_dir_clean(tag)}"
+        target = self.repo_dir_for(tag)
         # 已克隆过则直接复用
         if (target / ".git").exists():
             if on_log:

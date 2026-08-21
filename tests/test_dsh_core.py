@@ -170,6 +170,13 @@ def test_local_repos(tmp_path):
     assert m.local_repos() == [{"tag": "v0.1.0", "path": str(d)}]
 
 
+def test_repo_dir_for_strips_prefix(tmp_path):
+    m = _manager(tmp_path)
+    # 关键: 不能重复 dsh- 前缀(曾导致"未下载"误报)
+    assert m.repo_dir_for("dsh-v0.1.1-rc.1") == m.repos_dir / "dsh-v0.1.1-rc.1"
+    assert m.repo_dir_for("v0.2.0") == m.repos_dir / "dsh-v0.2.0"
+
+
 # ---------------- workspace ----------------
 
 def _mk_repo(m, tag):
