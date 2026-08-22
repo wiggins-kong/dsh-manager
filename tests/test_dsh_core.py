@@ -340,6 +340,19 @@ def test_delete_tag_readonly_git_objects(tmp_path):
     assert not d.exists()                     # 整个目录被清掉, 无残留
 
 
+@mock.patch("dsh_core.subprocess.run")
+def test_kill_port_owner(mock_run, tmp_path):
+    """启动前会清理占用 3080 的残留进程, 避免新后端 bind 失败误判成功。"""
+    r1 = mock.Mock(); r1.stdout = "12345\n"; r1.returncode = 0   # 端口查询
+    r2 = mock.Mock(); r2.stdout = ""; r2.returncode = 0          # taskkill
+    mock_run.side_effect = [r1, r2]
+    m = _manager(tmp_path)
+    m._kill_port_owner(3080)
+    cmds = [c.args[0] for c in mock_run.call_args_list]
+    assert any("Get-NetTCPConnection" in " ".join(c) for c in cmds)
+    assert ["taskkill", "/F", "/PID", "12345"] in cmds
+
+
 # ---------------- stop ----------------
 
 @mock.patch("dsh_core.subprocess.run")

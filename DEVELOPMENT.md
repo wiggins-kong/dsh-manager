@@ -121,11 +121,11 @@ uv pip install --python .venv/Scripts/python.exe pytest pyinstaller   # 开发/�
 
 ---
 
-## 六、开发进度(截至工作区未提交修复)
+## 六、开发进度(截至 v1.0)
 
 按时间倒序, 需求在 `docs/` 设计文档与 git 历史可见。
 
-- **(工作区未提交·实机反馈修复)**: ① 新增「删除源码」; ② 子进程加 `CREATE_NO_WINDOW` 不再弹黑窗; ③ 修复日志机制(js_api 传 JS 函数会变 null, 改 `_emit_log` evaluate_js 推送, 进度实时可见); ④ `start_dsh` 加进程存活检查 + 端口就绪探测, 失败明确报错; ⑤ clone/install/build/启动分阶段日志; ⑥ `clone_tag` 复用判定从"只看 .git"改为"package.json + .git 都不缺", 修复"下载中断残留被误判为已下载"的 bug, 残缺目录自动清理重下; ⑦ `start_dsh` 智能跳过(`node_modules/.pnpm` 在则跳过 install, `apps/web/dist` 在则跳过 build), 二次运行秒级启动。
+- **(v1.0 发布版)**: ① 新增「删除源码」; ② 子进程加 `CREATE_NO_WINDOW` 不再弹黑窗; ③ 修复日志机制(js_api 传 JS 函数会变 null, 改 `_emit_log` evaluate_js 推送, 进度实时可见); ④ `start_dsh` 加进程存活检查 + 端口就绪探测, 失败明确报错; ⑤ clone/install/build/启动分阶段日志; ⑥ `clone_tag` 复用判定改为"package.json + .git 都不缺", 残缺下载残留自动清理重下; ⑦ 智能跳过 install/build, 二次运行秒级启动; ⑧ 运行不再自动弹浏览器(`--no-open`); ⑨ 启动前清理占用端口的残留进程 + 关窗自动停后端(修"前端打不开"); ⑩ 删除源码用 `_rmtree_force` 强删只读 .git 文件, 不留半截目录; ⑪ 自研「中枢调度」应用图标(exe + 窗口标题栏 + 界面左上角三处统一), `gen_icon.py` 可复现。
 - **0e965f2 / 99f5173 (主题 + 工作区)**: 前端主题支持 `system`(跟随系统实时切换); 源码路径设置 + 原生目录浏览; 切换工作区时弹窗处理旧源码(移动/删除/不动), 均配测试。
 - **c859b5b (桥接时序)**: 修复 pywebview 桥就绪时序, 不再开局误判为普通浏览器导致点击/刷新/设置失效。
 - **714a912 (兼容与打包)**: 版本识别支持官方 `dsh-` 前缀; Windows pnpm `.cmd` 垫片; clone 复用与 `.dsh-tag` 标记; 补齐 README 与打包配置。
@@ -133,7 +133,7 @@ uv pip install --python .venv/Scripts/python.exe pytest pyinstaller   # 开发/�
 - **35ddfc8 (设计)**: DSH 管理器设计文档。
 - **810358f**: 修复 `Api.start` 源码目录重复 `dsh-` 前缀导致的"未下载"误报; 待克隆路径显示真实工作区。
 
-**质量状态**: `pytest` 31/31 通过; 已打包 exe 可运行; 远程仓库已建立并推送。
+**质量状态**: `pytest` 33/33 通过; exe 已集成自研图标; GitHub Actions 自动构建发布 Release。
 
 ---
 

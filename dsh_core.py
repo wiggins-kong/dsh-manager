@@ -301,6 +301,8 @@ class DSHManager:
 
         # 后台启动 dsh web; 加 --no-open 禁止 DSH 自动打开浏览器(管理器自带"打开前端"按钮)
         self.stop_dsh()
+        # 清理可能残留占用该端口的孤儿 dsh node(直接关窗等场景遗留), 保证新后端能绑定端口
+        self._kill_port_owner(port)
         if on_log:
             on_log(f"[3/3] 启动后端: pnpm dsh web --port {port} …")
         proc = subprocess.Popen(
@@ -392,6 +394,29 @@ class DSHManager:
 
     def web_url(self) -> str:
         return f"http://127.0.0.1:{self._srv_port}"
+
+    def _kill_port_owner(self, port: int) -> None:
+        """启动前强制清理占用指定端口(3080)的残留进程。
+
+        场景: 用户直接关闭管理器窗口或上次进程未清理时, 残留的 dsh node 仍占着
+        3080。此时新启动的 dsh web 会 bind 失败(端口被占), 而 `_wait_ready` 却会
+        因"端口已有进程监听"而误判为成功 → 前端打开的其实是那个异常残留进程,
+        表现为"后端起来了但前端打不开/404"。故启动前先清掉端口的监听者。
+        """
+        if os.name != "nt":
+            return
+        try:
+            r = subprocess.run(
+                ["powershell", "-NoProfile", "-Command",
+                 "(Get-NetTCPConnection -LocalPort %d -State Listen "
+                 "-ErrorAction SilentlyContinue).OwningProcess" % port],
+                capture_output=True, text=True, timeout=10, check=False)
+            for tok in r.stdout.split():
+                if tok.strip().isdigit():
+                    subprocess.run(["taskkill", "/F", "/PID", tok.strip()],
+                                   capture_output=True, timeout=10, check=False)
+        except Exception:  # noqa: BLE001  尽力而为, 失败不阻塞启动
+            pass
 
     # ---------- app-facing helpers ----------
     def set_theme(self, theme: str) -> str:

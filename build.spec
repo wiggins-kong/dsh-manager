@@ -5,7 +5,7 @@ a = Analysis(
     ['main.py'],
     pathex=[],
     binaries=[],
-    datas=[('web', 'web')],
+    datas=[('web', 'web'), ('assets/app.ico', 'assets')],
     hiddenimports=[
         'webview',
         'webview.platforms.edgechromium',

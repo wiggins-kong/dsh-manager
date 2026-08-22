@@ -1,0 +1,65 @@
+name: Release
+
+# 推送 v* 标签时自动构建并发布 Release
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write   # 允许创建 Release 与上传产物
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: 安装依赖
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest pyinstaller
+
+      - name: 跑测试
+        run: python -m pytest tests/ -q
+
+      - name: 打包 exe
+        run: pyinstaller build.spec --noconfirm
+
+      - name: 提取版本号
+        id: ver
+        shell: bash
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: 整理产物
+        shell: bash
+        run: |
+          mkdir -p release
+          cp "dist/DSH管理器.exe" "release/DSH管理器-${{ steps.ver.outputs.version }}.exe"
+
+      - name: 创建 Release 并上传 exe
+        uses: softprops/action-gh-release@v2
+        with:
+          name: DSH 管理器 ${{ github.ref_name }}
+          body: |
+            ## DSH 管理器 ${{ github.ref_name }}
+
+            管理 [deepseek-ai/deepseek-harness](https://github.com/deepseek-ai/deepseek-harness) 的桌面工具：
+            版本查询 → 源码下载 → 后台运行 → 打开前端 → 停止。
+
+            ### 下载
+            - `DSH管理器-${{ steps.ver.outputs.version }}.exe` — Windows 单文件版，无需安装 Python。
+
+            ### 运行要求
+            - Windows 10/11（自带 WebView2）
+            - 运行 DSH 需另装 Node.js + pnpm（管理器会检测并引导）
+          files: release/DSH管理器-${{ steps.ver.outputs.version }}.exe
+          draft: false
+          prerelease: false

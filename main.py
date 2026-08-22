@@ -124,6 +124,32 @@ class Api:
         return True
 
 
+def _icon_path() -> str:
+    """窗口图标路径: 打包后用 _MEIPASS 资源目录, 开发/源码用项目目录。"""
+    if getattr(sys, "frozen", False):
+        base = Path(getattr(sys, "_MEIPASS", ""))
+    else:
+        base = BASE_DIR
+    return str(base / "assets" / "app.ico")
+
+
+def _apply_window_icon():
+    """在 GUI 线程给 Windows 窗体设置标题栏图标 (native winforms Form.Icon)。
+
+    pywebview 的 create_window / start 都未暴露 Windows 下的 window icon
+    (icon 参数仅支持 GTK/QT), 因此走底层 .NET 设置。
+    """
+    try:
+        import clr
+        from System.Drawing import Icon
+        win = webview.windows[0] if webview.windows else None
+        native = getattr(win, "native", None)
+        if native is not None and os.path.exists(_icon_path()):
+            native.Icon = Icon(_icon_path())
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def main():
     api = Api()
     window = webview.create_window(
@@ -137,7 +163,14 @@ def main():
         frameless=False,
         easy_drag=False,
     )
+    # 窗口显示后设置标题栏图标(pywebview 的 icon 参数不支持 Windows, 走 native.Icon)
+    window.events.shown += _apply_window_icon
     webview.start(debug=(os.environ.get("DSH_DEBUG") == "1"))
+    # 窗口显示后清理可能残留的 DSH 后端, 避免留下孤儿进程占端口
+    try:
+        api.m.stop_dsh()
+    except Exception:  # noqa: BLE001
+        pass
 
 
 if __name__ == "__main__":
