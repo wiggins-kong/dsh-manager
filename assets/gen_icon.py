@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""生成 DSH 管理器程序图标 (第一版「中枢调度」Control Nexus)。
+"""生成 DSH-manager 程序图标 (第一版「中枢调度」Control Nexus)。
 
 - 深色圆角方块底座 (深蓝渐变 + 细边框)
 - 中央唯一一颗绿色发光核心节点 (#22C55E, 品牌 "run green")

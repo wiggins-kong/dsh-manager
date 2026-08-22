@@ -1,4 +1,4 @@
-# DEVELOPMENT.md — DSH 管理器 开发进度 & 接手指南
+# DEVELOPMENT.md — DSH-manager 开发进度 & 接手指南
 
 > 本文件是项目的**开发交接单**: 记录当前进度、架构、约定、坑位, 以及如何在家/单位两台机器无缝接手。
 > 更新的原则: 每次提交有意义改动后, 顺手更新本文件的「开发进度」与「下一步」两节, 并 push 到 GitHub。
@@ -8,7 +8,7 @@
 
 ## 一、项目是什么
 
-**DSH 管理器 (DeepSeek Harness Manager)** — 一个轻量 Windows 桌面工具, 用来管理
+**DSH-manager (DeepSeek Harness Manager)** — 一个轻量 Windows 桌面工具, 用来管理
 [`deepseek-ai/deepseek-harness`](https://github.com/deepseek-ai/deepseek-harness) (简称 DSH) 的完整生命周期:
 
 **版本查询 → 源码下载 → 后台运行 → 打开前端 → 停止**, 并支持**代理设置**(查版本、下源码走代理)。
@@ -81,7 +81,7 @@ uv pip install --python .venv/Scripts/python.exe pytest pyinstaller   # 开发/�
 ### 打包 exe
 ```bash
 .venv/Scripts/pyinstaller.exe build.spec --noconfirm
-# 产物: dist/DSH管理器.exe (onefile, 可拷到任意 Win10/11 直接运行)
+# 产物: dist/DSH-manager.exe (onefile, 可拷到任意 Win10/11 直接运行)
 ```
 
 ---
@@ -130,7 +130,7 @@ uv pip install --python .venv/Scripts/python.exe pytest pyinstaller   # 开发/�
 - **c859b5b (桥接时序)**: 修复 pywebview 桥就绪时序, 不再开局误判为普通浏览器导致点击/刷新/设置失效。
 - **714a912 (兼容与打包)**: 版本识别支持官方 `dsh-` 前缀; Windows pnpm `.cmd` 垫片; clone 复用与 `.dsh-tag` 标记; 补齐 README 与打包配置。
 - **7d88a03 / 0e0e0c9 (骨架)**: 前端界面 + pywebview 入口; dsh_core 核心逻辑 + 测试。
-- **35ddfc8 (设计)**: DSH 管理器设计文档。
+- **35ddfc8 (设计)**: DSH-manager 设计文档。
 - **810358f**: 修复 `Api.start` 源码目录重复 `dsh-` 前缀导致的"未下载"误报; 待克隆路径显示真实工作区。
 
 **质量状态**: `pytest` 33/33 通过; exe 已集成自研图标; GitHub Actions 自动构建发布 Release。
@@ -154,5 +154,5 @@ uv pip install --python .venv/Scripts/python.exe pytest pyinstaller   # 开发/�
 
 1. **仓库即真相**: 所有代码以 **公开的 GitHub 仓库** 为准 (公开后请在此处填写仓库地址)。两处 `git pull` / `push` 保持同步。
 2. 接手第一句可对 Hermes 说:
-   > 继续开发 DSH 管理器, 项目在 `E:\...dsh-manager`。先读 `DEVELOPMENT.md` 和 `README.md` 了解现状, `git pull` 对齐, 然后按「七、下一步」继续。
+   > 继续开发 DSH-manager, 项目在 `E:\...dsh-manager`。先读 `DEVELOPMENT.md` 和 `README.md` 了解现状, `git pull` 对齐, 然后按「七、下一步」继续。
 3. git 流程: `git pull` 开始 → 改 → 测试通过 → `git add` → `git commit`(中文信息, 遵循 `feat/fix/docs/style/...` 前缀)→ `git push`。

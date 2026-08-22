@@ -1,4 +1,4 @@
-/* DSH 管理器前端逻辑 (pywebview jsbridge) */
+/* DSH-manager 前端逻辑 (pywebview jsbridge) */
 (function () {
   "use strict";
 
@@ -367,7 +367,7 @@
     started = true;
     if (!webview || !webview.api) {
       els.nodeBadge.innerHTML = '<span class="dot"></span>请在 pywebview 中运行';
-      els.versionList.innerHTML = '<li class="empty">此页面需在 DSH 管理器窗口中运行</li>';
+      els.versionList.innerHTML = '<li class="empty">此页面需在 DSH-manager 窗口中运行</li>';
       return;
     }
     bind();

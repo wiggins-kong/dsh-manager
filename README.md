@@ -1,4 +1,4 @@
-# DSH 管理器 (DeepSeek Harness Manager)
+# DSH-manager (DeepSeek Harness Manager)
 
 一个轻量桌面管理器，用于管理 DeepSeek Harness（`deepseek-ai/deepseek-harness`，简称 DSH）的
 **版本查询 → 源码下载 → 后台运行 → 打开前端 → 停止**，并支持**代理设置**（查版本、下源码走代理）。
@@ -34,7 +34,7 @@ uv pip install --python .venv/Scripts/python.exe pytest pyinstaller   # 开发/�
 .venv/Scripts/pyinstaller.exe build.spec --noconfirm
 ```
 
-产物在 `dist/DSH管理器.exe`，可拷到任意 Win10/Win11 直接运行（无需 Python）。
+产物在 `dist/DSH-manager.exe`，可拷到任意 Win10/Win11 直接运行（无需 Python）。
 `data/` 目录会生成在 exe 同级，包含配置与下载的源码。
 
 ## 目录结构

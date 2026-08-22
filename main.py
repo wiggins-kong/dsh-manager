@@ -1,4 +1,4 @@
-"""DSH 管理器 — pywebview 入口 + JS API 桥。
+"""DSH-manager — pywebview 入口 + JS API 桥。
 
 运行:  python main.py
 """
@@ -153,7 +153,7 @@ def _apply_window_icon():
 def main():
     api = Api()
     window = webview.create_window(
-        "DeepSeek Harness 管理器",
+        "DSH-manager",
         str(WEB_DIR / "index.html"),
         js_api=api,
         width=1080,

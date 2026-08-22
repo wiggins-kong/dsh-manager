@@ -1,4 +1,4 @@
-# DSH 管理器 · 设计文档
+# DSH-manager · 设计文档
 
 - 日期: 2026-08-21
 - 作者: Hermes Agent

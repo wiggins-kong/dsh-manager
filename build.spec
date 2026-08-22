@@ -1,4 +1,4 @@
-# PyInstaller 打包配置: DSH 管理器 (onefile)
+# PyInstaller 打包配置: DSH-manager (onefile)
 # 用法: pyinstaller build.spec --noconfirm
 
 a = Analysis(
@@ -29,7 +29,7 @@ exe = EXE(
     a.binaries,
     a.datas,
     [],
-    name='DSH管理器',
+    name='DSH-manager',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,

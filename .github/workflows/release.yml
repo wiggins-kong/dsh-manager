@@ -42,24 +42,24 @@ jobs:
         shell: bash
         run: |
           mkdir -p release
-          cp "dist/DSH管理器.exe" "release/DSH管理器-${{ steps.ver.outputs.version }}.exe"
+          cp "dist/DSH-manager.exe" "release/DSH-manager-${{ steps.ver.outputs.version }}.exe"
 
       - name: 创建 Release 并上传 exe
         uses: softprops/action-gh-release@v2
         with:
-          name: DSH 管理器 ${{ github.ref_name }}
+          name: DSH-manager ${{ github.ref_name }}
           body: |
-            ## DSH 管理器 ${{ github.ref_name }}
+            ## DSH-manager ${{ github.ref_name }}
 
             管理 [deepseek-ai/deepseek-harness](https://github.com/deepseek-ai/deepseek-harness) 的桌面工具：
             版本查询 → 源码下载 → 后台运行 → 打开前端 → 停止。
 
             ### 下载
-            - `DSH管理器-${{ steps.ver.outputs.version }}.exe` — Windows 单文件版，无需安装 Python。
+            - `DSH-manager-${{ steps.ver.outputs.version }}.exe` — Windows 单文件版，无需安装 Python。
 
             ### 运行要求
             - Windows 10/11（自带 WebView2）
             - 运行 DSH 需另装 Node.js + pnpm（管理器会检测并引导）
-          files: release/DSH管理器-${{ steps.ver.outputs.version }}.exe
+          files: release/DSH-manager-${{ steps.ver.outputs.version }}.exe
           draft: false
           prerelease: false
