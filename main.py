@@ -19,6 +19,9 @@ BASE_DIR = Path(__file__).parent
 WEB_DIR = BASE_DIR / "web"
 
 
+APP_VERSION = "1.0"   # 应用版本号(发版时与 git tag 同步更新)
+
+
 class Api:
     """暴露给前端 JS 的方法 (window.pywebview.api.*)。"""
 
@@ -65,6 +68,7 @@ class Api:
             "running": self.m.running,
             "running_tag": self.m.config.get("last_tag"),
             "workspace": str(self.m.repos_dir),
+            "version": APP_VERSION,
         }
 
     # ---------- versions ----------

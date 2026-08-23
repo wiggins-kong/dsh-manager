@@ -251,6 +251,7 @@
     state.local = {};
     (st.local || []).forEach((r) => { state.local[r.tag] = r.path; });
     state.workspace = st.workspace;
+    $("version-badge").textContent = "v" + (st.version || "1.0");
     renderLocal();
     renderVersions();
     if (state.selected) selectVersion(state.selected);
