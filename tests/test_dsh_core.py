@@ -427,3 +427,29 @@ def test_start_builds_when_missing(
     assert cmds[0] == _spawn_cmd(["pnpm", "install"])
     assert cmds[1] == _spawn_cmd(["pnpm", "run", "build"])
     assert cmds[2] == _spawn_cmd(["pnpm", "dsh", "web", "--port", "3080", "--no-open"])
+
+
+@mock.patch("dsh_core.time.sleep")
+@mock.patch("dsh_core.requests.get")
+@mock.patch("dsh_core.subprocess.run")
+@mock.patch("dsh_core.subprocess.Popen")
+def test_start_pnpm_env_skips_deps_check(
+        mock_popen, mock_run, mock_get, mock_sleep, tmp_path):
+    """pnpm 子进程须带 pnpm_config_verify_deps_before_run=false。
+
+    否则 pnpm 11 运行前会做依赖状态检查, 需 purge modules 目录时要求 TTY
+    确认, 无 TTY 的子进程直接 abort(ERR_PNPM_ABORTED_REMOVE_MODULES_DIR_NO_TTY),
+    表现为"后端进程在启动过程中退出"。本测试确保 install/build/dsh web
+    三个 pnpm 调用都注入了该环境变量。
+    """
+    mock_run.return_value.returncode = 0
+    mock_get.return_value = None
+    _fake_popen(mock_popen)
+    m = _manager(tmp_path)
+    repo = m.repo_dir_for("v0.1.0")
+    repo.mkdir(parents=True)
+    (repo / "package.json").write_text("{}")
+    m.start_dsh(repo, on_log=lambda l: None)
+    for call in mock_popen.call_args_list:
+        env = call.kwargs.get("env") or {}
+        assert env.get("pnpm_config_verify_deps_before_run") == "false"

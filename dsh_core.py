@@ -30,6 +30,21 @@ def _spawn_cmd(argv: list[str]) -> list[str]:
     return argv
 
 
+def _pnpm_env() -> dict:
+    """pnpm 子进程环境变量。
+
+    pnpm 11 在 `pnpm <script>`(如 `pnpm dsh web`)运行前会做依赖状态检查
+    (verify-deps-before-run): 发现 node_modules 与 lockfile 不同步时自动执行
+    install; 若需重建(移除)modules 目录, 会要求 TTY 交互确认——而管理器子进程
+    无 TTY, pnpm 直接 abort(ERR_PNPM_ABORTED_REMOVE_MODULES_DIR_NO_TTY),
+    表现为\"后端进程在启动过程中退出\"。置 false 跳过该检查, 依赖是否就绪由
+    管理器自身的 install/build 步骤控制。
+    """
+    env = dict(os.environ)
+    env["pnpm_config_verify_deps_before_run"] = "false"
+    return env
+
+
 def _hidden_popen_kwargs(extra_flags: int = 0) -> dict:
     """Windows 下用 CREATE_NO_WINDOW 隐藏子进程命令行窗口(不弹黑窗)。
 
@@ -263,7 +278,7 @@ class DSHManager:
         proc = subprocess.Popen(
             cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
             text=True, encoding="utf-8", errors="replace", cwd=cwd,
-            **_hidden_popen_kwargs(),
+            env=_pnpm_env(), **_hidden_popen_kwargs(),
         )
         for line in proc.stdout:
             line = line.rstrip("\n")
@@ -310,6 +325,7 @@ class DSHManager:
             cwd=repo_dir,
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
             text=True, encoding="utf-8", errors="replace",
+            env=_pnpm_env(),
             **_hidden_popen_kwargs(getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)),
         )
         self._proc = proc

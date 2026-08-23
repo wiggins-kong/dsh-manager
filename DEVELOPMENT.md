@@ -114,10 +114,11 @@ uv pip install --python .venv/Scripts/python.exe pytest pyinstaller   # 开发/�
 2. **UI 风**: 干净的玻璃/现代/马赛克风(Mica), **不要**红章/古风花哨皮肤; 字体偏好微软雅黑 Semibold(MsyhSb); 主题通过设置弹窗切换, 不在工具栏加开关。
 3. **Windows pnpm 是 `.cmd` 垫片**: 直接 subprocess 会找不到, 必须经 `cmd /c` —— 由 `_spawn_cmd()` 统一处理; 新增外部命令调用时注意。
 4. **子进程一律隐藏窗口**: Windows 下 Popen 必须带 `CREATE_NO_WINDOW`(`_hidden_popen_kwargs()`), 否则 cmd/git 会弹出黑窗。
-5. **js_api 不能传 JS 函数**: pywebview 的 js_api 参数走 JSON 序列化, JS 函数会变 `null`(on_log 回调从未生效!)。日志推送必须走 `Api._emit_log` → `window.evaluate_js` → 前端 `window.__dsh_log`。新增强日志功能时照此模式。
-6. **目录名前缀**: 已下载源码目录统一 `dsh-<版本>`; 命名直接决定"是否已下载"判断, 改动须同步 `repo_dir_for` 与测试 `test_repo_dir_for_strips_prefix`。
-7. **配置合并**: `_load_config` 用 `default_config` + `update` 合并, 新增配置项记得加进 `_default_config()`。
-8. **测试先行**: 核心逻辑改完必跑 `pytest`; 有 DOM/时序类问题时多写桥接层测试。
+5. **pnpm 11 运行前会做依赖状态检查**: `pnpm <script>`(如 `pnpm dsh web`)前 `runDepsStatusCheck` 发现 node_modules 与 lockfile 不同步时自动 install; 若需移除 modules 目录则要求 TTY 确认, 无 TTY 子进程直接 abort(`ERR_PNPM_ABORTED_REMOVE_MODULES_DIR_NO_TTY`), 表现为"后端进程在启动过程中退出"。所有 pnpm 子进程必须带环境变量 `pnpm_config_verify_deps_before_run=false`(`_pnpm_env()`)跳过检查, 依赖是否就绪交给管理器自身的 install/build 步骤。
+6. **js_api 不能传 JS 函数**: pywebview 的 js_api 参数走 JSON 序列化, JS 函数会变 `null`(on_log 回调从未生效!)。日志推送必须走 `Api._emit_log` → `window.evaluate_js` → 前端 `window.__dsh_log`。新增强日志功能时照此模式。
+7. **目录名前缀**: 已下载源码目录统一 `dsh-<版本>`; 命名直接决定"是否已下载"判断, 改动须同步 `repo_dir_for` 与测试 `test_repo_dir_for_strips_prefix`。
+8. **配置合并**: `_load_config` 用 `default_config` + `update` 合并, 新增配置项记得加进 `_default_config()`。
+9. **测试先行**: 核心逻辑改完必跑 `pytest`; 有 DOM/时序类问题时多写桥接层测试。
 
 ---
 
@@ -133,7 +134,9 @@ uv pip install --python .venv/Scripts/python.exe pytest pyinstaller   # 开发/�
 - **35ddfc8 (设计)**: DSH-manager 设计文档。
 - **810358f**: 修复 `Api.start` 源码目录重复 `dsh-` 前缀导致的"未下载"误报; 待克隆路径显示真实工作区。
 
-**质量状态**: `pytest` 33/33 通过; exe 已集成自研图标; GitHub Actions 自动构建发布 Release。
+**质量状态**: `pytest` 34/34 通过; exe 已集成自研图标; GitHub Actions 自动构建发布 Release。
+
+**v1.0.1 (pnpm 11 兼容修复)**: `pnpm dsh web` 启动报 "后端进程在启动过程中退出"。根因: pnpm 11 运行前做依赖状态检查(`runDepsStatusCheck`), 发现 node_modules 与 lockfile 不同步时自动 install, 需移除 modules 目录时要求 TTY 确认, 而管理器子进程无 TTY 直接 abort(`ERR_PNPM_ABORTED_REMOVE_MODULES_DIR_NO_TTY`)。修复: 所有 pnpm 子进程带 `pnpm_config_verify_deps_before_run=false`(`_pnpm_env()`), 跳过运行前检查。含端到端验证(真实启动 dsh web 成功)。
 
 ---
 
