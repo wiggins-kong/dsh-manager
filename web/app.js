@@ -345,6 +345,7 @@
     $("btn-delete").addEventListener("click", () => state.selected && runDelete(state.selected));
     $("btn-open").addEventListener("click", () => webview.api.open_web().catch((e) => toast("打开失败：" + e.message)));
     $("btn-clear-log").addEventListener("click", clearLog);
+    $("btn-log-dir").addEventListener("click", () => webview.api.open_log_dir().catch((e) => toast("打开失败：" + e.message)));
     $("btn-settings").addEventListener("click", openSettings);
     $("btn-modal-close").addEventListener("click", closeSettings);
     // 设置仅通过"关闭按钮"或 Esc 关闭, 点击弹窗外不关闭(避免误触)

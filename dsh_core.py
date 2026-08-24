@@ -56,6 +56,17 @@ def _hidden_popen_kwargs(extra_flags: int = 0) -> dict:
     return {"creationflags": flags}
 
 
+def _make_logging(on_log, log_file=None):
+    """返回包装 on_log: 同时调用原始回调并写日志文件。"""
+    def wrapper(line: str) -> None:
+        if on_log:
+            on_log(line)
+        if log_file is not None:
+            log_file.write(line + "\n")
+            log_file.flush()
+    return wrapper
+
+
 def _rmtree_force(path, on_log=None) -> None:
     """强制递归删除目录, 专为 Windows 编写。
 
@@ -291,9 +302,29 @@ class DSHManager:
 
     # ---------- run / stop ----------
     def start_dsh(self, repo_dir: str | Path, port: int = 3080, on_log=None) -> dict:
+        from datetime import datetime
+
         repo_dir = Path(repo_dir)
         if not (repo_dir / "package.json").exists():
             raise FileNotFoundError(f"找不到 DSH 源码目录: {repo_dir}")
+
+        # ---------- 日志落盘 ----------
+        log_dir = self.data_dir / "logs"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        tag_str = self._tag_from_repo(repo_dir)
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        log_path = log_dir / f"dsh-{_dir_clean(tag_str)}-{ts}.log"
+        log_file = open(log_path, "a", encoding="utf-8")
+        # 包装 on_log: UI 回调 + 日志文件 同时输出
+        ui_log = on_log  # 保留原始引用
+        _log = _make_logging(ui_log, log_file)
+        try:
+            return self._start_dsh_inner(repo_dir, port, _log, log_file, log_path, tag_str)
+        finally:
+            log_file.close()
+
+    def _start_dsh_inner(self, repo_dir, port, on_log, log_file, log_path, tag_str) -> dict:
+        """start_dsh 的内部实现(提取出来方便 finally 关闭日志文件)。"""
         self._srv_port = port
         # 智能跳过已完成的步骤, 避免每次点"运行"都全量 install/build(很慢):
         #  - node_modules/.pnpm 存在 => 依赖已装, 跳过 pnpm install
@@ -316,8 +347,9 @@ class DSHManager:
 
         # 后台启动 dsh web; 加 --no-open 禁止 DSH 自动打开浏览器(管理器自带"打开前端"按钮)
         self.stop_dsh()
-        # 清理可能残留占用该端口的孤儿 dsh node(直接关窗等场景遗留), 保证新后端能绑定端口
-        self._kill_port_owner(port)
+        # 智能端口探测: 优先用 preferred 端口; 若被残留进程占用则强杀, 被外部占用则自动递增换端口
+        port = self._resolve_port(port, on_log)
+        self._srv_port = port
         if on_log:
             on_log(f"[3/3] 启动后端: pnpm dsh web --port {port} …")
         proc = subprocess.Popen(
@@ -363,7 +395,7 @@ class DSHManager:
 
         self.config["last_tag"] = self._tag_from_repo(repo_dir)
         self.save_config()
-        return {"pid": proc.pid, "port": port, "status": "running"}
+        return {"pid": proc.pid, "port": port, "status": "running", "log_path": str(log_path)}
 
     def _wait_ready(self, url: str, timeout: float = 60.0,
                     interval: float = 1.0) -> str:
@@ -411,28 +443,57 @@ class DSHManager:
     def web_url(self) -> str:
         return f"http://127.0.0.1:{self._srv_port}"
 
-    def _kill_port_owner(self, port: int) -> None:
-        """启动前强制清理占用指定端口(3080)的残留进程。
+    def _resolve_port(self, preferred: int, on_log=None) -> int:
+        """返回可用端口。preferred 空闲则直接用; 被占用则尝试杀残留,仍占则递增探测。
 
-        场景: 用户直接关闭管理器窗口或上次进程未清理时, 残留的 dsh node 仍占着
-        3080。此时新启动的 dsh web 会 bind 失败(端口被占), 而 `_wait_ready` 却会
-        因"端口已有进程监听"而误判为成功 → 前端打开的其实是那个异常残留进程,
-        表现为"后端起来了但前端打不开/404"。故启动前先清掉端口的监听者。
+        策略: 从 preferred 开始依次探测(最多 10 个端口), 每个端口:
+        - 空闲 → 直接使用
+        - 被占用 → 尝试 taskkill /F /PID 杀掉(处理 DSH 残留); 杀后若仍被占(外部进程)则跳下一个
+        - 全部占满 → 抛 RuntimeError
         """
         if os.name != "nt":
-            return
+            return preferred
+        for attempt in range(preferred, preferred + 10):
+            occupant = self._port_occupant(attempt)
+            if occupant is None:
+                return attempt
+            # 端口被占, 尝试杀掉(处理 DSH 残留进程)
+            if on_log:
+                on_log(f"[清理] 端口 {attempt} 被占用(PID {occupant}), 尝试释放…")
+            try:
+                subprocess.run(["taskkill", "/F", "/PID", str(occupant)],
+                               capture_output=True, timeout=10, check=False)
+            except Exception:  # noqa: BLE001
+                pass
+            time.sleep(0.3)
+            # 杀后复查
+            if self._port_occupant(attempt) is None:
+                if on_log:
+                    on_log(f"[清理] 端口 {attempt} 已释放")
+                return attempt
+            # 外部进程无法杀掉 → 换下一个端口
+            if on_log:
+                on_log(f"[端口] {attempt} 被外部进程占用, 尝试 {attempt + 1}")
+        raise RuntimeError(
+            f"无法找到可用端口({preferred}–{preferred + 9} 均被外部占用)")
+
+    @staticmethod
+    def _port_occupant(port: int) -> int | None:
+        """返回占用指定端口的 PID, 无占用返回 None。仅 Windows。"""
+        if os.name != "nt":
+            return None
         try:
             r = subprocess.run(
                 ["powershell", "-NoProfile", "-Command",
-                 "(Get-NetTCPConnection -LocalPort %d -State Listen "
-                 "-ErrorAction SilentlyContinue).OwningProcess" % port],
-                capture_output=True, text=True, timeout=10, check=False)
-            for tok in r.stdout.split():
-                if tok.strip().isdigit():
-                    subprocess.run(["taskkill", "/F", "/PID", tok.strip()],
-                                   capture_output=True, timeout=10, check=False)
-        except Exception:  # noqa: BLE001  尽力而为, 失败不阻塞启动
-            pass
+                 ("$p=(Get-NetTCPConnection -LocalPort %d -State Listen "
+                  "-ErrorAction SilentlyContinue).OwningProcess;"
+                  "if($p){($p|Sort-Object -Unique)[0]}else{$null}") % port],
+                capture_output=True, text=True, timeout=10, check=False,
+                **_hidden_popen_kwargs())
+            tok = r.stdout.strip()
+            return int(tok) if tok.isdigit() else None
+        except Exception:  # noqa: BLE001
+            return None
 
     # ---------- app-facing helpers ----------
     def set_theme(self, theme: str) -> str:

@@ -7,6 +7,7 @@ from unittest import mock
 import pytest
 
 import dsh_core
+from pathlib import Path
 from dsh_core import DSHManager, sort_versions, _spawn_cmd
 
 
@@ -340,19 +341,6 @@ def test_delete_tag_readonly_git_objects(tmp_path):
     assert not d.exists()                     # 整个目录被清掉, 无残留
 
 
-@mock.patch("dsh_core.subprocess.run")
-def test_kill_port_owner(mock_run, tmp_path):
-    """启动前会清理占用 3080 的残留进程, 避免新后端 bind 失败误判成功。"""
-    r1 = mock.Mock(); r1.stdout = "12345\n"; r1.returncode = 0   # 端口查询
-    r2 = mock.Mock(); r2.stdout = ""; r2.returncode = 0          # taskkill
-    mock_run.side_effect = [r1, r2]
-    m = _manager(tmp_path)
-    m._kill_port_owner(3080)
-    cmds = [c.args[0] for c in mock_run.call_args_list]
-    assert any("Get-NetTCPConnection" in " ".join(c) for c in cmds)
-    assert ["taskkill", "/F", "/PID", "12345"] in cmds
-
-
 # ---------------- stop ----------------
 
 @mock.patch("dsh_core.subprocess.run")
@@ -363,6 +351,36 @@ def test_stop_dsh(mock_run, tmp_path):
     assert m.stop_dsh() is True
     cmd = mock_run.call_args[0][0]
     assert "taskkill" in cmd or "kill" in " ".join(cmd)
+
+
+# ---------------- port resolve ----------------
+
+def test_port_resolves_free(tmp_path):
+    """端口空闲时 _resolve_port 直接返回 preferred。"""
+    m = _manager(tmp_path)
+    with mock.patch.object(type(m), '_port_occupant', return_value=None):
+        assert m._resolve_port(3080) == 3080
+
+
+def test_port_resolves_after_kill(tmp_path):
+    """端口被占, taskkill 后释放 → 返回 preferred。"""
+    m = _manager(tmp_path)
+    with mock.patch.object(type(m), '_port_occupant', side_effect=[1234, None]), \
+         mock.patch("dsh_core.subprocess.run") as mock_run:
+        mock_run.return_value.returncode = 0
+        assert m._resolve_port(3080) == 3080
+
+
+def test_port_resolves_foreign_skip(tmp_path):
+    """端口被外部占用且杀不掉 → 换下一个端口。"""
+    m = _manager(tmp_path)
+    # 3080 被占且杀后仍被占, 3081 空闲
+    with mock.patch.object(type(m), '_port_occupant',
+                           side_effect=[9999, 9999, None]), \
+         mock.patch("dsh_core.subprocess.run") as mock_run, \
+         mock.patch("dsh_core.time.sleep"):
+        mock_run.return_value.returncode = 0
+        assert m._resolve_port(3080) == 3081
 
 
 # ---------------- start (智能跳过 install/build) ----------------
@@ -394,16 +412,18 @@ def _fake_popen(mock_popen):
 @mock.patch("dsh_core.requests.get")
 @mock.patch("dsh_core.subprocess.run")
 @mock.patch("dsh_core.subprocess.Popen")
+@mock.patch.object(dsh_core.DSHManager, '_resolve_port',
+                   lambda self, preferred, on_log=None: preferred)
 def test_start_skips_install_and_build_when_ready(
         mock_popen, mock_run, mock_get, mock_sleep, tmp_path):
     """依赖已装 + 前端已构建 => 只启动 dsh web, 不再 install/build。"""
-    mock_run.return_value.returncode = 0      # stop_dsh 用
-    mock_get.return_value = None             # _wait_ready 视为就绪
+    mock_run.return_value.returncode = 0
+    mock_get.return_value = None
     _fake_popen(mock_popen)
     m = _manager(tmp_path)
     repo = _mk_built_repo(m, "v0.1.0")
     m.start_dsh(repo, on_log=lambda l: None)
-    assert mock_popen.call_count == 1        # 只起 dsh web
+    assert mock_popen.call_count == 1
     cmd = mock_popen.call_args_list[0].args[0]
     assert cmd == _spawn_cmd(["pnpm", "dsh", "web", "--port", "3080", "--no-open"])
 
@@ -412,6 +432,8 @@ def test_start_skips_install_and_build_when_ready(
 @mock.patch("dsh_core.requests.get")
 @mock.patch("dsh_core.subprocess.run")
 @mock.patch("dsh_core.subprocess.Popen")
+@mock.patch.object(dsh_core.DSHManager, '_resolve_port',
+                   lambda self, preferred, on_log=None: preferred)
 def test_start_builds_when_missing(
         mock_popen, mock_run, mock_get, mock_sleep, tmp_path):
     """无依赖/无前端产物 => 依次 install -> build -> dsh web。"""
@@ -433,15 +455,11 @@ def test_start_builds_when_missing(
 @mock.patch("dsh_core.requests.get")
 @mock.patch("dsh_core.subprocess.run")
 @mock.patch("dsh_core.subprocess.Popen")
+@mock.patch.object(dsh_core.DSHManager, '_resolve_port',
+                   lambda self, preferred, on_log=None: preferred)
 def test_start_pnpm_env_skips_deps_check(
         mock_popen, mock_run, mock_get, mock_sleep, tmp_path):
-    """pnpm 子进程须带 pnpm_config_verify_deps_before_run=false。
-
-    否则 pnpm 11 运行前会做依赖状态检查, 需 purge modules 目录时要求 TTY
-    确认, 无 TTY 的子进程直接 abort(ERR_PNPM_ABORTED_REMOVE_MODULES_DIR_NO_TTY),
-    表现为"后端进程在启动过程中退出"。本测试确保 install/build/dsh web
-    三个 pnpm 调用都注入了该环境变量。
-    """
+    """pnpm 子进程须带 pnpm_config_verify_deps_before_run=false。"""
     mock_run.return_value.returncode = 0
     mock_get.return_value = None
     _fake_popen(mock_popen)
@@ -453,3 +471,27 @@ def test_start_pnpm_env_skips_deps_check(
     for call in mock_popen.call_args_list:
         env = call.kwargs.get("env") or {}
         assert env.get("pnpm_config_verify_deps_before_run") == "false"
+
+
+@mock.patch("dsh_core.time.sleep")
+@mock.patch("dsh_core.requests.get")
+@mock.patch("dsh_core.subprocess.run")
+@mock.patch("dsh_core.subprocess.Popen")
+@mock.patch.object(dsh_core.DSHManager, '_resolve_port',
+                   lambda self, preferred, on_log=None: preferred)
+def test_start_dsh_creates_log_file(
+        mock_popen, mock_run, mock_get, mock_sleep, tmp_path):
+    """start_dsh 在 data/logs/ 创建本次运行的日志文件。"""
+    mock_run.return_value.returncode = 0
+    mock_get.return_value = None
+    _fake_popen(mock_popen)
+    m = _manager(tmp_path)
+    repo = _mk_built_repo(m, "v0.1.0")
+    result = m.start_dsh(repo, on_log=lambda l: None)
+    log_path = Path(result["log_path"])
+    assert log_path.exists()
+    assert log_path.suffix == ".log"
+    assert "dsh-" in log_path.name
+    log_content = log_path.read_text(encoding="utf-8")
+    # 日志应包含端口信息或就绪信息
+    assert "3080" in log_content or "启动后端" in log_content or "就绪" in log_content

@@ -4,6 +4,7 @@
 """
 from __future__ import annotations
 
+import ctypes
 import json
 import os
 import sys
@@ -20,6 +21,31 @@ WEB_DIR = BASE_DIR / "web"
 
 
 APP_VERSION = "1.0"   # 应用版本号(发版时与 git tag 同步更新)
+
+# ---- 单实例锁 (Windows Named Mutex) ----
+_MUTEX_NAME = "Global\\DSHManagerSingleInstance_v1"
+
+
+def _acquire_single_instance() -> bool:
+    """尝试获取单实例互斥锁。返回 True 表示是第一个实例, False 表示已有实例在运行。"""
+    if os.name != "nt":
+        return True
+    try:
+        kernel32 = ctypes.windll.kernel32
+        user32 = ctypes.windll.user32
+        mutex = kernel32.CreateMutexW(None, False, _MUTEX_NAME)
+        if kernel32.GetLastError() == 183:  # ERROR_ALREADY_EXISTS
+            kernel32.CloseHandle(mutex)
+            # 尝试激活已有实例窗口
+            hwnd = user32.FindWindowW(None, "DSH-manager")
+            if hwnd:
+                user32.ShowWindow(hwnd, 9)  # SW_RESTORE
+                user32.SetForegroundWindow(hwnd)
+            return False
+        # 注意: 不要 CloseHandle(mutex), 需保持到进程退出
+        return True
+    except Exception:  # noqa: BLE001
+        return True
 
 
 class Api:
@@ -59,6 +85,7 @@ class Api:
     # ---------- state ----------
     def get_state(self) -> dict:
         node = self.m.node_available()
+        log_dir = str(self.m.data_dir / "logs")
         return {
             "versions": list(self.m.config.get("cached_versions", [])),
             "local": self.m.local_repos(),
@@ -67,7 +94,9 @@ class Api:
             "node": node,
             "running": self.m.running,
             "running_tag": self.m.config.get("last_tag"),
+            "running_port": self.m._srv_port if self.m.running else None,
             "workspace": str(self.m.repos_dir),
+            "log_dir": log_dir,
             "version": APP_VERSION,
         }
 
@@ -96,6 +125,16 @@ class Api:
     def open_web(self):
         self._run_sync(lambda: webbrowser.open(self.m.web_url()))
         return True
+
+    def open_log_dir(self):
+        """用系统文件管理器打开日志目录。"""
+        log_dir = str(self.m.data_dir / "logs")
+        os.makedirs(log_dir, exist_ok=True)
+        if os.name == "nt":
+            os.startfile(log_dir)
+        else:
+            self._run_sync(lambda: webbrowser.open("file://" + log_dir))
+        return log_dir
 
     # ---------- proxy / theme ----------
     def save_proxy(self, enabled, host, port):
@@ -155,6 +194,9 @@ def _apply_window_icon():
 
 
 def main():
+    if not _acquire_single_instance():
+        print("[DSH-manager] 已有实例运行中, 已激活已有窗口。")
+        return
     api = Api()
     window = webview.create_window(
         "DSH-manager",

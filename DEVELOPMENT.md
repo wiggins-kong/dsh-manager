@@ -134,9 +134,12 @@ uv pip install --python .venv/Scripts/python.exe pytest pyinstaller   # 开发/�
 - **35ddfc8 (设计)**: DSH-manager 设计文档。
 - **810358f**: 修复 `Api.start` 源码目录重复 `dsh-` 前缀导致的"未下载"误报; 待克隆路径显示真实工作区。
 
-**质量状态**: `pytest` 34/34 通过; exe 已集成自研图标; GitHub Actions 自动构建发布 Release。
+**质量状态**: `pytest` 37/37 通过; exe 已集成自研图标; GitHub Actions 自动构建发布 Release。
 
-**v1.0.1 (pnpm 11 兼容修复)**: `pnpm dsh web` 启动报 "后端进程在启动过程中退出"。根因: pnpm 11 运行前做依赖状态检查(`runDepsStatusCheck`), 发现 node_modules 与 lockfile 不同步时自动 install, 需移除 modules 目录时要求 TTY 确认, 而管理器子进程无 TTY 直接 abort(`ERR_PNPM_ABORTED_REMOVE_MODULES_DIR_NO_TTY`)。修复: 所有 pnpm 子进程带 `pnpm_config_verify_deps_before_run=false`(`_pnpm_env()`), 跳过运行前检查。含端到端验证(真实启动 dsh web 成功)。
+**v1.1 (功能增强)**:
+- **单实例锁**: Windows Named Mutex(`CreateMutexW`) 防双开, 第二实例自动激活已有窗口并退出。
+- **后端日志落盘**: 每次运行追加写入 `data/logs/dsh-<tag>-<时间戳>.log`, install/build/运行阶段全量记录; 前端新增「打开日志目录」按钮。
+- **端口冲突自动换端口**: `_resolve_port` 从 3080 起探测, 残留 DSH 进程(taskkill 可杀)直接释放, 外部进程占用则递增换端口(3081/3082…, 最多 10 次); `get_state` 返回实际 `running_port` 供前端显示。
 
 ---
 
