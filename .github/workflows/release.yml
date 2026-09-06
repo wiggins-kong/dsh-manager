@@ -44,22 +44,26 @@ jobs:
           mkdir -p release
           cp "dist/DSH-manager.exe" "release/DSH-manager-${{ steps.ver.outputs.version }}.exe"
 
+      - name: 从 CHANGELOG 提取当前版本说明
+        shell: bash
+        run: |
+          ver="${GITHUB_REF_NAME#v}"
+          awk -v ver="$ver" '
+            /^## \[/ { if (found) exit; if (index($0, "[" ver "]") > 0) { found = 1; next } }
+            found { print }
+          ' CHANGELOG.md > release_notes.md
+          # 版本号未写进 CHANGELOG 时回退为文件头说明, 避免空描述
+          if [ ! -s release_notes.md ]; then
+            echo "未在 CHANGELOG.md 找到 [$ver] 小节" > release_notes.md
+          fi
+          cat release_notes.md
+
       - name: 创建 Release 并上传 exe
         uses: softprops/action-gh-release@v2
         with:
           name: DSH-manager ${{ github.ref_name }}
-          body: |
-            ## DSH-manager ${{ github.ref_name }}
-
-            管理 [deepseek-ai/deepseek-harness](https://github.com/deepseek-ai/deepseek-harness) 的桌面工具：
-            版本查询 → 源码下载 → 后台运行 → 打开前端 → 停止。
-
-            ### 下载
-            - `DSH-manager-${{ steps.ver.outputs.version }}.exe` — Windows 单文件版，无需安装 Python。
-
-            ### 运行要求
-            - Windows 10/11（自带 WebView2）
-            - 运行 DSH 需另装 Node.js + pnpm（管理器会检测并引导）
+          body_path: release_notes.md
+          append_body: false
           files: release/DSH-manager-${{ steps.ver.outputs.version }}.exe
           draft: false
           prerelease: false
