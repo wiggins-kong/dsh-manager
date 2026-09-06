@@ -227,19 +227,19 @@
     }
   }
 
-  /* ---------- 主题 (深色/浅色/跟随系统) ---------- */
+  /* ---------- 主题 (固定跟随系统) ---------- */
   function systemDark() {
     return window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
   }
-  function applyTheme(theme) {
-    const resolved = theme === "system" ? (systemDark() ? "dark" : "light") : theme;
-    document.documentElement.dataset.theme = resolved;
+  function applyTheme() {
+    const mode = systemDark() ? "dark" : "light";
+    document.documentElement.dataset.theme = mode;
+    // 通知 Python 同步原生标题栏颜色; 桥未就绪时静默跳过 (Python 在 shown 时已按系统色兜底)
+    if (webview && webview.api) webview.api.sync_theme(mode).catch(() => {});
   }
   // 实时跟随系统深浅色切换
   if (window.matchMedia) {
-    window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => {
-      if (state.theme === "system") applyTheme("system");
-    });
+    window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", applyTheme);
   }
 
   /* ---------- 设置弹窗 ---------- */
@@ -262,7 +262,6 @@
     $("proxy-enabled").checked = currentProxy.enabled;
     $("proxy-host").value = currentProxy.host;
     $("proxy-port").value = currentProxy.port;
-    $("theme-select").value = state.theme || "dark";
     $("workspace-path").value = state.workspace || "";
     $("settings-modal").classList.remove("hidden");
     $("proxy-host").focus();
@@ -280,41 +279,128 @@
 
   async function doApplyWorkspace(on_old) {
     const target = pendingWs.new_path;
+    const conflicts = pendingWs.conflicts || [];
     pendingWs = null;
     closeWsModal();
+
+    // 残缺副本逐个询问; 完整副本自动跳过视为已迁移, 无需询问
+    const resolutions = {};
+    if (on_old === "move") {
+      for (const c of conflicts.filter((c) => !c.complete)) {
+        const act = await askConflict(c.name);
+        if (!act) return;  // 用户取消迁移, 什么都不动
+        resolutions[c.name] = act;
+      }
+    }
+
+    const needsProgress = on_old !== "leave";
+    if (needsProgress) {
+      $("ws-progress-text").textContent = "准备中…";
+      $("ws-progress-bar").style.width = "0%";
+      $("ws-progress-modal").classList.remove("hidden");
+    }
     try {
-      const res = await webview.api.apply_workspace(target, on_old);
+      const res = await webview.api.apply_workspace(target, on_old, resolutions);
       await refreshStateLocal();
       closeSettings();
-      toast(on_old === "move" ? "已迁移源码到新路径" :
-            on_old === "delete" ? "已删除旧源码并切换路径" : "已切换源码路径");
+      if (res && res.stopped_backend) {
+        // 迁移前强制停了后端, 同步界面运行态, 并提示用户重新运行
+        state.running = false;
+        setControls(true);
+      }
+      const stoppedNote = res && res.stopped_backend
+        ? "；迁移期间已停止后端，请重新运行" : "";
+      if (on_old === "move") {
+        const skipped = (res.skipped || []).length;
+        toast("已迁移 " + res.moved + " 份源码到新路径" +
+          (skipped ? "，跳过 " + skipped + " 份（新路径已存在，视为已迁移）" : "")
+          + stoppedNote);
+      } else if (on_old === "delete") {
+        toast("已删除旧源码并切换路径" + stoppedNote);
+      } else {
+        toast("已切换源码路径");
+      }
     } catch (e) {
       closeSettings();
       toast("切换失败：" + (e && e.message ? e.message : e));
+    } finally {
+      $("ws-progress-modal").classList.add("hidden");
     }
   }
+
+  // 残缺副本逐个询问。resolve("delete_copy"|"skip") 或 resolve(null)=取消迁移
+  function askConflict(name) {
+    return new Promise((resolve) => {
+      $("ws-conflict-name").textContent = name;
+      $("ws-conflict-modal").classList.remove("hidden");
+      const finish = (v) => {
+        $("ws-conflict-modal").classList.add("hidden");
+        $("ws-conflict-delete").removeEventListener("click", onDelete);
+        $("ws-conflict-skip").removeEventListener("click", onSkip);
+        $("ws-conflict-cancel").removeEventListener("click", onCancel);
+        resolve(v);
+      };
+      const onDelete = () => finish("delete_copy");
+      const onSkip = () => finish("skip");
+      const onCancel = () => finish(null);
+      $("ws-conflict-delete").addEventListener("click", onDelete);
+      $("ws-conflict-skip").addEventListener("click", onSkip);
+      $("ws-conflict-cancel").addEventListener("click", onCancel);
+    });
+  }
+
+  // Python 侧 evaluate_js 推送迁移进度 (main.Api._emit_ws_progress)
+  window.__dsh_ws_progress = function (done, total, name) {
+    const pct = total > 0 ? Math.round((done / total) * 100) : 0;
+    $("ws-progress-bar").style.width = pct + "%";
+    $("ws-progress-text").textContent = total > 0
+      ? `正在迁移 ${done}/${total} 份源码` + (name ? `：${name}` : "") + "…"
+      : "准备中…";
+  };
+
+  // 迁移失败后清理半成品的进度 (main.Api._emit_ws_cleanup)
+  window.__dsh_ws_cleanup = function (done, total, name) {
+    const pct = total > 0 ? Math.round((done / total) * 100) : 0;
+    $("ws-progress-bar").style.width = pct + "%";
+    $("ws-progress-text").textContent = total > 0
+      ? `迁移失败，正在清理残留 ${done}/${total}` + (name ? `：${name}` : "") + "…"
+      : "迁移失败，正在清理…";
+  };
 
   async function saveSettings() {
     const enabled = $("proxy-enabled").checked;
     const host = $("proxy-host").value.trim() || "127.0.0.1";
     const port = parseInt($("proxy-port").value, 10) || 7897;
-    const theme = $("theme-select").value;
     const newPath = $("workspace-path").value.trim();
     try {
       await webview.api.save_proxy(enabled, host, port);
-      await webview.api.set_theme(theme);
-      state.theme = theme;
       state.proxy = { enabled, host, port };
       state.proxyOn = enabled;
-      applyTheme(theme);
 
       // 工作区处理
       if (newPath) {
         const prev = await webview.api.preview_workspace(newPath);
         if (!prev.same) {
           if (prev.will_prompt && prev.old_count > 0) {
-            pendingWs = prev;
+            // 预检: 嵌套直接拒绝; 同名冲突数目提前告知, 不等动手才报错
+            const plan = await webview.api.plan_workspace(newPath);
+            if (plan.relation === "nested") {
+              toast("新路径在当前源码路径内部，不能作为工作区");
+              return;
+            }
+            const conflicts = plan.conflicts || [];
+            const incomplete = conflicts.filter((c) => !c.complete).length;
+            pendingWs = { ...prev, conflicts };
             $("ws-count").textContent = prev.old_count;
+            const note = $("ws-conflicts-note");
+            if (conflicts.length) {
+              note.textContent = `其中 ${conflicts.length} 份与新路径同名：` +
+                `完整副本将自动跳过（视为已迁移）` +
+                (incomplete ? `，${incomplete} 份残缺副本将逐个询问处理方式` : "");
+              note.classList.remove("hidden");
+            } else {
+              note.classList.add("hidden");
+            }
             openWsModal();
             return;  // 等用户在弹窗里选
           }
@@ -381,9 +467,8 @@
       state.proxy = st.proxy || { enabled: false, host: "127.0.0.1", port: 7897 };
       state.proxyOn = state.proxy.enabled;
       state.running = !!st.running;
-      state.theme = st.theme || "dark";
       state.workspace = st.workspace;
-      applyTheme(state.theme);
+      applyTheme();
       renderNode(st.node);
       renderVersions();
       renderLocal();

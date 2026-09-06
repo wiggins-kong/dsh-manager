@@ -13,10 +13,7 @@
       <span class="brand-mark" aria-hidden="true">
         <img src="brand.png" alt="DSH-manager">
       </span>
-      <div class="brand-text">
-        <h1>DSH-manager</h1>
-        <span class="subtitle">DeepSeek Harness · 版本 · 源码 · 运行</span>
-      </div>
+      <span class="brand-text">DeepSeek Harness</span>
     </div>
     <div class="titlebar-actions">
       <span id="version-badge" class="badge badge-neutral" title="应用版本">v1.0</span>
@@ -103,8 +100,8 @@
         <div class="divider"></div>
         <div class="log-head">
           <h3>运行日志</h3>
-          <button id="btn-clear-log" class="link-btn">清空</button>
-          <button id="btn-log-dir" class="link-btn" title="打开日志目录">日志目录</button>
+          <button id="btn-clear-log" class="btn btn-sm">清空</button>
+          <button id="btn-log-dir" class="btn btn-sm" title="在文件管理器中打开后端日志所在文件夹">打开日志目录</button>
         </div>
         <pre id="log" class="log" aria-live="polite"></pre>
       </div>
@@ -157,20 +154,6 @@
         <p class="hint">之后下载的源码会放到新路径。若旧路径已有源码，保存时会询问如何处理。</p>
       </section>
 
-      <section class="settings-group">
-        <h3>外观</h3>
-        <div class="settings-row">
-          <label class="field">
-            <span>主题</span>
-            <select id="theme-select">
-              <option value="dark">深色</option>
-              <option value="light">浅色</option>
-              <option value="system">跟随系统</option>
-            </select>
-          </label>
-        </div>
-      </section>
-
       <div class="modal-foot">
         <button id="btn-settings-save" class="btn btn-primary">保存</button>
       </div>
@@ -187,10 +170,46 @@
         <p class="hint" id="ws-desc" style="margin:0 0 12px;font-size:13px">
           检测到旧路径有 <span id="ws-count">0</span> 份源码，如何把它们留在原处或搬到新路径？
         </p>
+        <p class="hint hidden" id="ws-conflicts-note" style="margin:0 0 12px;font-size:13px;color:var(--accent)"></p>
         <div class="settings-row" style="flex-direction:column;align-items:stretch;gap:8px">
           <button id="ws-move" class="btn btn-accent" style="justify-content:center">移动到新路径</button>
           <button id="ws-delete" class="btn btn-danger" style="justify-content:center">删除旧源码</button>
           <button id="ws-leave" class="btn" style="justify-content:center">保持不动（只换新路径）</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 残缺副本逐个询问弹窗 -->
+  <div id="ws-conflict-modal" class="modal-overlay hidden" role="dialog" aria-modal="true">
+    <div class="modal">
+      <div class="modal-head">
+        <h2>发现同名残缺目录</h2>
+      </div>
+      <div class="settings-group">
+        <p class="hint" style="margin:0 0 12px;font-size:13px">
+          新路径已存在 <code id="ws-conflict-name"></code>，但它不是完整源码（缺
+          package.json），可能是复制到一半的残缺副本。程序不会擅自删它，如何处理？
+        </p>
+        <div class="settings-row" style="flex-direction:column;align-items:stretch;gap:8px">
+          <button id="ws-conflict-delete" class="btn btn-danger" style="justify-content:center">删除残缺副本并移动旧源码</button>
+          <button id="ws-conflict-skip" class="btn" style="justify-content:center">跳过此目录（两边都保留）</button>
+          <button id="ws-conflict-cancel" class="btn" style="justify-content:center">取消迁移</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 工作区迁移进度弹窗(迁移期间不可关闭) -->
+  <div id="ws-progress-modal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="ws-progress-title">
+    <div class="modal">
+      <div class="modal-head">
+        <h2 id="ws-progress-title">正在迁移源码…</h2>
+      </div>
+      <div class="settings-group">
+        <p class="hint" id="ws-progress-text" style="margin:0 0 12px;font-size:13px">准备中…</p>
+        <div style="height:6px;border-radius:3px;background:var(--border);overflow:hidden">
+          <div id="ws-progress-bar" style="height:100%;width:0%;background:var(--accent);transition:width .2s"></div>
         </div>
       </div>
     </div>

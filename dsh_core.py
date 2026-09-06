@@ -39,9 +39,15 @@ def _pnpm_env() -> dict:
     无 TTY, pnpm 直接 abort(ERR_PNPM_ABORTED_REMOVE_MODULES_DIR_NO_TTY),
     表现为\"后端进程在启动过程中退出\"。置 false 跳过该检查, 依赖是否就绪由
     管理器自身的 install/build 步骤控制。
+
+    另注入 npm_config_enable_thin_lto=false: 官方 Windows 版 Node(v22+) 自身以
+    thin LTO 编译, node-gyp 会把 enable_thin_lto=true 带进原生模块工程, 进而
+    注入 lld 链接器专用的 -flto=thin / /opt:lldltojobs 参数; MSVC 的 link.exe
+    不认识这些参数, 编译直接失败(LNK1117), 表现为 pnpm install 阶段部署失败。
     """
     env = dict(os.environ)
     env["pnpm_config_verify_deps_before_run"] = "false"
+    env["npm_config_enable_thin_lto"] = "false"
     return env
 
 
@@ -57,13 +63,20 @@ def _hidden_popen_kwargs(extra_flags: int = 0) -> dict:
 
 
 def _make_logging(on_log, log_file=None):
-    """返回包装 on_log: 同时调用原始回调并写日志文件。"""
+    """返回包装 on_log: 同时调用原始回调并写日志文件。
+
+    后台进程的生命周期比 start_dsh 长(日志文件在启动流程结束时已关闭),
+    后续输出若直接 write 会抛 ValueError 弄死 pump 线程, 故容忍已关闭的文件。
+    """
     def wrapper(line: str) -> None:
         if on_log:
             on_log(line)
         if log_file is not None:
-            log_file.write(line + "\n")
-            log_file.flush()
+            try:
+                log_file.write(line + "\n")
+                log_file.flush()
+            except ValueError:
+                pass
     return wrapper
 
 
@@ -152,6 +165,20 @@ class DSHManager:
         self._proc = None          # 当前 DSH 子进程
         self._proc_pid: int | None = None
         self._srv_port = 3080
+        self._auth_url: str | None = None  # dsh web 打印的带 token 认证 URL
+
+    @staticmethod
+    def _parse_auth_url(line: str) -> str | None:
+        """从 dsh web 的输出行提取带 token 的认证 URL。
+
+        新版 DSH web 有浏览器会话认证: 每次启动生成进程级 launch token,
+        启动完成时打印 `dsh web: http://127.0.0.1:PORT/?token=...`;
+        访问该 URL 会种下会话 cookie 后 303 跳回干净的 `/`。裸地址一律 401
+        ("dsh web authentication required")。输出可能带 ANSI 颜色码, 先剥掉。
+        """
+        clean = re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", line)
+        m = re.search(r"dsh web: (https?://[^\s]+)", clean)
+        return m.group(1) if m else None
 
     # ---------- config ----------
     @staticmethod
@@ -160,7 +187,7 @@ class DSHManager:
             "proxy": {"enabled": False, "host": "127.0.0.1", "port": 7897},
             "cached_versions": [],
             "last_tag": None,
-            "theme": "dark",
+            "theme": "system",
             "workspace": None,
         }
 
@@ -347,6 +374,7 @@ class DSHManager:
 
         # 后台启动 dsh web; 加 --no-open 禁止 DSH 自动打开浏览器(管理器自带"打开前端"按钮)
         self.stop_dsh()
+        self._auth_url = None
         # 智能端口探测: 优先用 preferred 端口; 若被残留进程占用则强杀, 被外部占用则自动递增换端口
         port = self._resolve_port(port, on_log)
         self._srv_port = port
@@ -366,6 +394,9 @@ class DSHManager:
         def _pump():
             for line in proc.stdout:
                 line = line.rstrip("\n")
+                auth = self._parse_auth_url(line)
+                if auth:
+                    self._auth_url = auth
                 if on_log:
                     on_log(line)
 
@@ -388,6 +419,12 @@ class DSHManager:
             raise RuntimeError("后端进程在启动过程中退出, 请查看上方日志中的具体错误")
         if on_log:
             if status == "ready":
+                # dsh web 就绪后会紧接着打印带 token 的认证 URL; 稍等它出现,
+                # 避免就绪日志和「打开前端」拿到的是 401 的裸地址
+                deadline = time.time() + 5.0
+                while (self._auth_url is None and time.time() < deadline
+                       and self._proc is not None and self._proc.poll() is None):
+                    time.sleep(0.2)
                 on_log(f"[就绪] 后端已启动: {self.web_url()}")
             else:
                 on_log(f"[提示] 进程仍在运行但端口暂未就绪(>60s), "
@@ -419,6 +456,7 @@ class DSHManager:
         return repo_dir.name.removeprefix("dsh-")
 
     def stop_dsh(self) -> bool:
+        self._auth_url = None
         if not self._proc_pid:
             return True
         pid = self._proc_pid
@@ -441,7 +479,9 @@ class DSHManager:
         return True
 
     def web_url(self) -> str:
-        return f"http://127.0.0.1:{self._srv_port}"
+        # 优先返回带 token 的认证 URL(新版 dsh web 裸地址会 401);
+        # token 尚未解析到或旧版无认证时退回裸地址
+        return self._auth_url or f"http://127.0.0.1:{self._srv_port}"
 
     def _resolve_port(self, preferred: int, on_log=None) -> int:
         """返回可用端口。preferred 空闲则直接用; 被占用则尝试杀残留,仍占则递增探测。
@@ -524,27 +564,156 @@ class DSHManager:
             "will_prompt": bool((not same) and old_count > 0),
         }
 
-    def apply_workspace(self, path: str | Path, on_old: str = "leave") -> dict:
-        """切换工作区。on_old: move=把旧源码移动到新路径 / delete=删掉旧源码 / leave=不动旧源码。"""
-        if on_old not in ("move", "delete", "leave"):
-            on_old = "leave"
+    @staticmethod
+    def _workspace_relation(new: Path, old: Path) -> str:
+        """新路径与旧路径的关系: 'same' | 'nested'(新在旧内部, 动文件会自我吞并) | 'ok'。"""
+        new_r = os.path.normcase(str(new.resolve()))
+        old_r = os.path.normcase(str(old.resolve()))
+        if new_r == old_r:
+            return "same"
+        if new_r.startswith(old_r + os.sep):
+            return "nested"
+        return "ok"
+
+    def plan_workspace_move(self, path: str | Path) -> dict:
+        """迁移预检: 不动任何文件、不停后端, 只报告动手后会发生什么。
+
+        返回 {relation, conflicts: [{name, complete}], movable, skippable}。
+        conflicts: 新路径已存在的同名目录。complete=True 表示是完整源码
+        (有 package.json), 移动时会跳过并视为已迁移; complete=False 是残缺
+        副本(如手动复制到一半), 需要用户逐个决定删除还是跳过。
+        """
         new = self._resolve_ws(path)
         old = self.repos_dir
-        if os.path.normcase(str(new.resolve())) == os.path.normcase(str(old.resolve())):
+        relation = self._workspace_relation(new, old)
+        conflicts: list[dict] = []
+        movable = 0
+        if relation == "ok" and old.exists():
+            for item in sorted(old.iterdir()):
+                if not item.is_dir():
+                    continue
+                target = new / item.name
+                if target.exists():
+                    conflicts.append(
+                        {"name": item.name,
+                         "complete": (target / "package.json").exists()})
+                else:
+                    movable += 1
+        return {"relation": relation, "conflicts": conflicts,
+                "movable": movable, "skippable": len(conflicts)}
+
+    def apply_workspace(self, path: str | Path, on_old: str = "leave",
+                        on_progress=None, on_cleanup=None,
+                        resolutions: dict | None = None) -> dict:
+        """切换工作区。on_old: move=把旧源码移动到新路径 / delete=删掉旧源码 / leave=不动旧源码。
+
+        on_progress(done, total, name): move/delete 的逐版本进度回调。
+        on_cleanup(done, total, name): 失败后清理半成品期间的进度回调。
+        resolutions: {目录名: "delete_copy"|"skip"}, 对应预检发现的残缺副本。
+
+        move/delete 会动旧路径里的文件。后端正从旧路径运行时必须先停掉:
+        node 进程持有 node_modules 的文件句柄, Windows 上整目录 os.rename 会
+        因句柄占用失败, shutil.move 退回逐文件复制, 复制到锁定文件时中途抛错,
+        留下"新路径半份、旧路径原封不动"的残局。故先停后端再动文件。
+
+        失败清理只会删**本次尝试中自己复制出来的**目录; 动手前就存在的目标
+        目录(用户手动放的)无论成败都不碰——之前"src 和 tgt 都在就删 tgt"的
+        清理会把用户预先复制到新路径的完整副本当成半成品删光, 属于数据毁灭。
+        """
+        if on_old not in ("move", "delete", "leave"):
+            on_old = "leave"
+        resolutions = resolutions or {}
+        new = self._resolve_ws(path)
+        old = self.repos_dir
+        relation = self._workspace_relation(new, old)
+        if relation == "same":
             return {"changed": False, "moved": 0, "action": "none", "new_path": str(new)}
-        new.mkdir(parents=True, exist_ok=True)
-        moved = 0
+        if relation == "nested":
+            raise RuntimeError(
+                f"新路径 {new} 在旧路径 {old} 内部, 执行会把旧路径搬进自己, 已阻止")
+
+        # 逐项决定处置; 未给决定的残缺副本直接拒绝, 不擅自删用户的文件
+        items: list[tuple[Path, str]] = []  # (源, 处置: move|skip|delete_copy)
         if on_old == "move" and old.exists():
-            for item in old.iterdir():
-                if item.is_dir():
-                    shutil.move(str(item), str(new / item.name))
+            for item in sorted(old.iterdir()):
+                if not item.is_dir():
+                    continue
+                target = new / item.name
+                if not target.exists():
+                    items.append((item, "move"))
+                elif (target / "package.json").exists():
+                    items.append((item, "skip"))
+                elif resolutions.get(item.name) == "delete_copy":
+                    items.append((item, "delete_copy"))
+                elif resolutions.get(item.name) == "skip":
+                    items.append((item, "skip"))
+                else:
+                    raise RuntimeError(
+                        f"新路径已存在残缺目录 {target}, 请先删除它或重新预检")
+
+        # 只在真的要动旧路径文件时才停后端(全跳过时切换配置即可, 后端可继续跑)
+        needs_file_ops = on_old == "delete" or any(a != "skip" for _, a in items)
+        stopped_backend = False
+        if needs_file_ops and self.running:
+            self.stop_dsh()
+            stopped_backend = True
+        new.mkdir(parents=True, exist_ok=True)
+
+        moved = 0
+        skipped: list[str] = []
+        if on_old == "move":
+            total = len(items)
+            attempted: list[tuple[Path, Path]] = []  # 本次尝试新建的目标, 失败可清理
+            try:
+                for i, (item, act) in enumerate(items):
+                    if on_progress:
+                        on_progress(i, total, item.name)
+                    if act == "skip":
+                        skipped.append(item.name)
+                        continue
+                    target = new / item.name
+                    if act == "delete_copy":
+                        _rmtree_force(target)
+                    attempted.append((item, target))
+                    shutil.move(str(item), str(target))
                     moved += 1
-        elif on_old == "delete" and old.exists():
+                if on_progress:
+                    on_progress(total, total, "")
+            except Exception:
+                self._cleanup_partial(attempted, on_cleanup)
+                raise
+        elif on_old == "delete":
+            if on_progress:
+                on_progress(0, 1, "")
             shutil.rmtree(old, ignore_errors=True)
+            if on_progress:
+                on_progress(1, 1, "")
         self.config["workspace"] = str(new)
         self.repos_dir = new
         self.save_config()
-        return {"changed": True, "moved": moved, "action": on_old, "new_path": str(new)}
+        return {"changed": True, "moved": moved, "skipped": skipped,
+                "action": on_old, "new_path": str(new),
+                "stopped_backend": stopped_backend}
+
+    @staticmethod
+    def _cleanup_partial(attempted, on_cleanup=None) -> None:
+        """失败后清理本次尝试复制出来的半成品。
+
+        只删"旧路径原件还在"(即没移完)且属于本次尝试的目标目录;
+        已完整移走的保留。用户预先存在的目录根本不会进 attempted。
+        """
+        doomed = [(src, tgt) for src, tgt in attempted
+                  if src.exists() and tgt.exists()]
+        total = len(doomed)
+        for i, (src, tgt) in enumerate(doomed):
+            if on_cleanup:
+                on_cleanup(i, total, tgt.name)
+            try:
+                _rmtree_force(tgt)
+            except Exception:  # noqa: BLE001  清理失败不掩盖最初错误
+                pass
+        if on_cleanup:
+            on_cleanup(total, total, "")
 
     def local_repos(self) -> list[dict]:
         """扫描已克隆的源码目录, 返回 [{tag, path}]。"""

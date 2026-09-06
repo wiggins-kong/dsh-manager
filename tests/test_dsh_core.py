@@ -301,6 +301,193 @@ def test_apply_same_noop(tmp_path):
     assert (m.repos_dir / "dsh-v0.1.0").exists()
 
 
+def test_apply_move_stops_running_backend(tmp_path):
+    """后端运行中 move/delete 必须先停后端, leave 不停。"""
+    m = _manager(tmp_path)
+    _mk_repo(m, "v0.1.0")
+    newdir = tmp_path / "newrepo"
+    with mock.patch.object(DSHManager, "running", new_callable=mock.PropertyMock,
+                           return_value=True), \
+         mock.patch.object(m, "stop_dsh", wraps=m.stop_dsh) as spy:
+        res = m.apply_workspace(newdir, on_old="move")
+        assert spy.called
+        assert res["stopped_backend"] is True
+    # leave 不应碰后端
+    m2 = _manager(tmp_path / "d2")
+    _mk_repo(m2, "v0.1.0")
+    with mock.patch.object(DSHManager, "running", new_callable=mock.PropertyMock,
+                           return_value=True), \
+         mock.patch.object(m2, "stop_dsh", wraps=m2.stop_dsh) as spy2:
+        m2.apply_workspace(tmp_path / "d2" / "nw", on_old="leave")
+        assert not spy2.called
+
+
+def test_apply_move_reports_progress(tmp_path):
+    m = _manager(tmp_path)
+    _mk_repo(m, "v0.1.0")
+    _mk_repo(m, "v0.1.1")
+    calls = []
+    res = m.apply_workspace(tmp_path / "nw", on_old="move",
+                            on_progress=lambda d, t, n: calls.append((d, t, n)))
+    assert res["moved"] == 2
+    assert calls[0] == (0, 2, "dsh-v0.1.0") or calls[0] == (0, 2, "dsh-v0.1.1")
+    assert calls[-1] == (2, 2, "")
+
+
+def test_apply_move_failure_cleans_partial(tmp_path):
+    """移动中途失败: 半成品被清理、旧路径完整、配置不切换、异常上抛。"""
+    m = _manager(tmp_path)
+    _mk_repo(m, "v0.1.0")
+    _mk_repo(m, "v0.1.1")
+    old = m.repos_dir
+    newdir = tmp_path / "newrepo"
+    real_move = dsh_core.shutil.move
+    def fake_move(src, dst):
+        if "v0.1.1" in src:
+            # 模拟第一个目录已移走后, 第二个复制到一半失败
+            Path(dst).mkdir(parents=True)
+            (Path(dst) / "partial.bin").write_bytes(b"x")
+            raise PermissionError("文件被占用")
+        return real_move(src, dst)
+    with mock.patch.object(dsh_core.shutil, "move", side_effect=fake_move):
+        with pytest.raises(PermissionError):
+            m.apply_workspace(newdir, on_old="move")
+    # 已完整移走的 v0.1.0 保留在新路径(不是垃圾, 不误删)
+    assert not (old / "dsh-v0.1.0").exists()
+    assert (newdir / "dsh-v0.1.0" / "package.json").exists()
+    # 失败的 v0.1.1: 旧路径原封不动, 新路径半成品被清掉
+    assert (old / "dsh-v0.1.1" / "package.json").exists()
+    assert not (newdir / "dsh-v0.1.1").exists()
+    # 配置不切换
+    assert m.repos_dir == old
+    assert m.config["workspace"] != str(newdir)
+
+
+def _mk_copy(dst: Path, src: Path):
+    """模拟用户手动把 src 完整复制到 dst。"""
+    dst.mkdir(parents=True)
+    (dst / "package.json").write_text((src / "package.json").read_text())
+
+
+def test_plan_move_reports_conflicts(tmp_path):
+    m = _manager(tmp_path)
+    _mk_repo(m, "v0.1.0")
+    _mk_repo(m, "v0.1.1")
+    newdir = tmp_path / "newrepo"
+    # 用户手动复制了完整的 v0.1.0 和残缺的 v0.1.1 到新路径
+    _mk_copy(newdir / "dsh-v0.1.0", m.repos_dir / "dsh-v0.1.0")
+    (newdir / "dsh-v0.1.1").mkdir()
+    plan = m.plan_workspace_move(newdir)
+    assert plan["relation"] == "ok"
+    assert plan["movable"] == 0
+    by_name = {c["name"]: c["complete"] for c in plan["conflicts"]}
+    assert by_name == {"dsh-v0.1.0": True, "dsh-v0.1.1": False}
+
+
+def test_plan_move_detects_nested(tmp_path):
+    m = _manager(tmp_path)
+    _mk_repo(m, "v0.1.0")
+    plan = m.plan_workspace_move(m.repos_dir / "sub")
+    assert plan["relation"] == "nested"
+
+
+def test_apply_move_skips_complete_existing_copy(tmp_path):
+    """用户先手动复制完整源码到新路径再切换: 跳过、不删副本、照常切配置、不停后端。"""
+    m = _manager(tmp_path)
+    src = _mk_repo(m, "v0.1.0")
+    newdir = tmp_path / "newrepo"
+    manual = newdir / "dsh-v0.1.0"
+    _mk_copy(manual, src)
+    with mock.patch.object(DSHManager, "running", new_callable=mock.PropertyMock,
+                           return_value=True), \
+         mock.patch.object(m, "stop_dsh", wraps=m.stop_dsh) as spy:
+        res = m.apply_workspace(newdir, on_old="move")
+        assert not spy.called  # 没动任何旧文件, 后端不该停
+    assert res["moved"] == 0
+    assert res["skipped"] == ["dsh-v0.1.0"]
+    assert res["stopped_backend"] is False
+    assert (manual / "package.json").exists()   # 用户副本完好
+    assert (src / "package.json").exists()      # 旧路径也未动
+    assert m.repos_dir == newdir
+
+
+def test_apply_move_incomplete_conflict_requires_resolution(tmp_path):
+    """残缺副本未给决定 → 拒绝执行, 不动任何文件; 给了决定按决定办。"""
+    m = _manager(tmp_path)
+    src = _mk_repo(m, "v0.1.0")
+    newdir = tmp_path / "newrepo"
+    broken = newdir / "dsh-v0.1.0"
+    broken.mkdir(parents=True)
+    (broken / "junk.txt").write_text("x")
+    with pytest.raises(RuntimeError, match="残缺"):
+        m.apply_workspace(newdir, on_old="move")
+    assert (src / "package.json").exists()   # 什么都没动
+    assert (broken / "junk.txt").exists()
+    assert m.repos_dir != newdir
+    # 决定=跳过: 两边都保留, 配置照常切换
+    res = m.apply_workspace(newdir, on_old="move", resolutions={"dsh-v0.1.0": "skip"})
+    assert res["moved"] == 0 and res["skipped"] == ["dsh-v0.1.0"]
+    assert (src / "package.json").exists() and (broken / "junk.txt").exists()
+    # 决定=删除副本: 副本被替换为旧路径源码
+    m2 = _manager(tmp_path / "d2")
+    src2 = _mk_repo(m2, "v0.1.0")
+    nd2 = tmp_path / "d2" / "newrepo"
+    (nd2 / "dsh-v0.1.0").mkdir(parents=True)
+    (nd2 / "dsh-v0.1.0" / "junk.txt").write_text("x")
+    res2 = m2.apply_workspace(nd2, on_old="move",
+                              resolutions={"dsh-v0.1.0": "delete_copy"})
+    assert res2["moved"] == 1
+    assert (nd2 / "dsh-v0.1.0" / "package.json").exists()
+    assert not (nd2 / "dsh-v0.1.0" / "junk.txt").exists()
+    assert not src2.exists()
+
+
+def test_apply_move_failure_never_deletes_preexisting_target(tmp_path):
+    """回归: 失败清理只删本次尝试复制出的目录, 预存在的目标目录不碰。
+
+    事故现场: 用户手动复制完整源码到新路径 → 程序 move 时目标已存在而失败
+    → 旧清理逻辑把用户副本当半成品删光(数据毁灭)。现在:
+    - 完整副本在执行前就被跳过, 根本不会进 attempted;
+    - 残缺副本只有用户明确选择 delete_copy 才会删, 删完即进 attempted,
+      其余任何失败路径都不得删除预存在目录。
+    """
+    m = _manager(tmp_path)
+    _mk_repo(m, "v0.1.0")
+    _mk_repo(m, "v0.1.1")
+    newdir = tmp_path / "newrepo"
+    manual = newdir / "dsh-v0.1.0"
+    _mk_copy(manual, m.repos_dir / "dsh-v0.1.0")   # 用户手动放的完整副本
+    real_move = dsh_core.shutil.move
+    def fake_move(src, dst):
+        if "v0.1.1" in str(src):
+            Path(dst).mkdir(parents=True)
+            (Path(dst) / "partial.bin").write_bytes(b"x")
+            raise PermissionError("文件被占用")
+        return real_move(src, dst)
+    with mock.patch.object(dsh_core.shutil, "move", side_effect=fake_move):
+        with pytest.raises(PermissionError):
+            m.apply_workspace(newdir, on_old="move")
+    # 关键断言: 用户手动副本原封不动
+    assert (manual / "package.json").exists()
+    # 我们自己复制出来的 v0.1.1 半成品被清掉
+    assert not (newdir / "dsh-v0.1.1").exists()
+    # 旧路径 v0.1.1 原件仍在
+    assert (m.repos_dir / "dsh-v0.1.1" / "package.json").exists()
+
+
+def test_apply_move_nested_rejected_without_touching_anything(tmp_path):
+    """新路径在旧路径内部: 直接拒绝, 后端不停、文件不动。"""
+    m = _manager(tmp_path)
+    src = _mk_repo(m, "v0.1.0")
+    with mock.patch.object(DSHManager, "running", new_callable=mock.PropertyMock,
+                           return_value=True), \
+         mock.patch.object(m, "stop_dsh", wraps=m.stop_dsh) as spy:
+        with pytest.raises(RuntimeError, match="内部"):
+            m.apply_workspace(src / "sub", on_old="move")
+        assert not spy.called
+    assert (src / "package.json").exists()
+
+
 # ---------------- delete ----------------
 
 
