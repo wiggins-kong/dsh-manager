@@ -20,7 +20,7 @@ BASE_DIR = Path(__file__).parent
 WEB_DIR = BASE_DIR / "web"
 
 
-APP_VERSION = "1.1.0"   # 应用版本号(发版时与 git tag 同步更新)
+APP_VERSION = "1.1.1"   # 应用版本号(发版时与 git tag 同步更新)
 
 # ---- 单实例锁 (Windows Named Mutex) ----
 _MUTEX_NAME = "Global\\DSHManagerSingleInstance_v1"

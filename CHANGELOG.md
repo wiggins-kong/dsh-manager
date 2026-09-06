@@ -3,6 +3,11 @@
 本文件记录 DSH-manager 的版本更新进度。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/),
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。应用内显示的版本号取自 `main.py` 的 `APP_VERSION`,发版时与 git tag 同步更新。
 
+## [1.1.1] - 2026-09-06
+
+### 修复
+- 主界面版本徽标显示为 v1.0 的问题:该徽标为桥接就绪前的兜底值,已硬编码在 `web/index.html`,与 `main.py` 的 `APP_VERSION` 脱节;现同步为当前版本号 v1.1.1
+
 ## [1.1.0] - 2026-09-06
 
 ### 新增
